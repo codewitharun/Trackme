@@ -7,9 +7,19 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../hooks/useAuth';
-import { getCheckins, getSummaries, getSchedules, punchIn, checkoutCheckin, submitCheckin } from '../../services/api';
+import { getCheckins, getSummaries, punchIn, checkoutCheckin, submitCheckin } from '../../services/api';
 import { Colors } from '../../constants/colors';
 import { format } from 'date-fns';
+
+const QUOTES = [
+  "Small steps every day lead to big results. 💪",
+  "Consistency beats perfection. Show up today. 🌟",
+  "Your future self is watching — make them proud. 🚀",
+  "One focused hour beats ten distracted ones. ⚡",
+  "Progress, not perfection. Keep going. 🔥",
+  "Every expert was once a beginner. Stay curious. 🧠",
+  "The secret of getting ahead is getting started. ✨",
+];
 
 type ModalType = 'punch-in' | 'punch-out' | 'photo' | null;
 type CameraPhase = 'camera' | 'form';
@@ -17,60 +27,46 @@ type CameraPhase = 'camera' | 'form';
 export default function StudentHome() {
   const { profile, org, signOut } = useAuth();
   const router = useRouter();
-  // Use UTC date — server stores dates in UTC, must match
   const today = new Date().toISOString().split('T')[0];
 
-  const [loading, setLoading]       = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [todayPunch, setTodayPunch] = useState<any>(null);      // single punch record
-  const [photoChecks, setPhotoChecks] = useState<any[]>([]);   // multiple photo checks
+  const [loading, setLoading]         = useState(true);
+  const [refreshing, setRefreshing]   = useState(false);
+  const [todayPunch, setTodayPunch]   = useState<any>(null);
+  const [photoCount, setPhotoCount]   = useState(0);
   const [todaySummary, setTodaySummary] = useState<any>(null);
-  const [schedules, setSchedules]   = useState<any[]>([]);
 
-  // Modal state
   const [activeModal, setActiveModal] = useState<ModalType>(null);
   const [phase, setPhase]             = useState<CameraPhase>('camera');
   const [photoUri, setPhotoUri]       = useState<string | null>(null);
   const [activity, setActivity]       = useState('');
   const [submitting, setSubmitting]   = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
-  const cameraRef   = useRef<CameraView>(null);
-  // Ref so handleSubmit always reads current modal type (avoids stale closure)
-  const modalRef = useRef<ModalType>(null);
+  const cameraRef  = useRef<CameraView>(null);
+  const modalRef   = useRef<ModalType>(null);
 
   const activityLabel = org?.activityLabel || 'Check-in';
   const reportLabel   = org?.reportLabel   || 'Daily Report';
+  const quote = QUOTES[new Date().getDay() % QUOTES.length];
 
   const load = useCallback(async () => {
-    // Fetch independently so one failure doesn't wipe out the rest
-    const [checkinsRes, summariesRes, schedsRes] = await Promise.allSettled([
+    const [checkinsRes, summariesRes] = await Promise.allSettled([
       getCheckins({ date: today }),
       getSummaries({ date: today }),
-      getSchedules(),
     ]);
-
     if (checkinsRes.status === 'fulfilled') {
       const all = checkinsRes.value;
-      console.log('[HOME] checkins loaded:', all.length, 'date:', today);
       setTodayPunch(all.find((c: any) => c.type === 'punch') || null);
-      setPhotoChecks(all.filter((c: any) => c.type === 'photo' || !c.type));
-    } else {
-      console.warn('[HOME] checkins failed:', checkinsRes.reason?.message);
+      setPhotoCount(all.filter((c: any) => c.type === 'photo' || !c.type).length);
     }
     if (summariesRes.status === 'fulfilled') {
       setTodaySummary(summariesRes.value[0] || null);
     }
-    if (schedsRes.status === 'fulfilled') {
-      setSchedules(schedsRes.value);
-    }
-
     setLoading(false);
     setRefreshing(false);
   }, [today]);
 
   useEffect(() => { load(); }, []);
 
-  // ── Camera helpers ─────────────────────────────────────────────────────────
   const openModal = async (type: ModalType) => {
     if (!permission?.granted) {
       const { granted } = await requestPermission();
@@ -84,7 +80,6 @@ export default function StudentHome() {
     if (!cameraRef.current) return;
     const photo = await cameraRef.current.takePictureAsync({ quality: 0.7 });
     if (photo?.uri) {
-      // Use ref so value is current even after setPhotoUri re-render
       if (modalRef.current === 'photo') {
         setPhotoUri(photo.uri);
         setPhase('form');
@@ -97,7 +92,6 @@ export default function StudentHome() {
   const handleSubmit = async (uri?: string) => {
     const imageUri = uri || photoUri;
     if (!imageUri) return;
-    // Read from ref — never stale
     const modalType = modalRef.current;
     setSubmitting(true);
     try {
@@ -106,22 +100,19 @@ export default function StudentHome() {
 
       if (modalType === 'punch-in') {
         const res = await punchIn(fd);
-        // Optimistic update — don't wait for re-fetch
         setTodayPunch(res);
         setActiveModal(null);
-        Alert.alert('✅ Punched In', 'Session started. Remember to punch out when done.');
+        Alert.alert('✅ Punched In', 'Session started!');
       } else if (modalType === 'punch-out' && todayPunch) {
         const res = await checkoutCheckin(todayPunch.id, fd);
-        // Optimistic update
         setTodayPunch((prev: any) => ({ ...prev, checkoutAt: res.checkoutAt, durationMins: res.durationMins }));
         setActiveModal(null);
-        Alert.alert('🏁 Punched Out', `Session duration: ${res.durationMins} minutes`);
+        Alert.alert('🏁 Punched Out', `Session: ${res.durationMins} minutes`);
       } else if (modalType === 'photo') {
         if (!activity.trim()) { setSubmitting(false); Alert.alert('Required', 'Describe what you are doing'); return; }
         fd.append('activity', activity.trim());
-        const res = await submitCheckin(fd);
-        // Optimistic update — prepend to list
-        setPhotoChecks((prev: any[]) => [res, ...prev]);
+        await submitCheckin(fd);
+        setPhotoCount(n => n + 1);
         setActiveModal(null);
       }
     } catch (err: any) {
@@ -137,7 +128,7 @@ export default function StudentHome() {
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
-  const punchDurationMins = todayPunch && !todayPunch.checkoutAt
+  const punchMins = todayPunch && !todayPunch.checkoutAt
     ? Math.round((Date.now() - new Date(todayPunch.submittedAt).getTime()) / 60000)
     : todayPunch?.durationMins || 0;
 
@@ -157,119 +148,104 @@ export default function StudentHome() {
           <TouchableOpacity onPress={signOut}><Text style={styles.signOut}>Sign Out</Text></TouchableOpacity>
         </View>
 
-        {/* Streak */}
+        {/* Streak + quote */}
         <View style={styles.streakCard}>
-          <Text style={styles.streakIcon}>🔥</Text>
-          <View>
-            <Text style={styles.streakNum}>{profile?.streak || 0} Day Streak</Text>
-            <Text style={styles.streakSub}>{profile?.totalCheckIns || 0} total photo checks</Text>
+          <View style={styles.streakRow}>
+            <Text style={styles.streakIcon}>🔥</Text>
+            <View>
+              <Text style={styles.streakNum}>{profile?.streak || 0} Day Streak</Text>
+              <Text style={styles.streakSub}>{profile?.totalCheckIns || 0} total checks</Text>
+            </View>
           </View>
+          <Text style={styles.quote}>"{quote}"</Text>
         </View>
 
-        {/* ── SECTION 1: Punch In / Punch Out ────────────────────────────── */}
-        <Text style={styles.sectionTitle}>⏱ Session (Punch In / Out)</Text>
+        {/* ── Punch In / Out ─────────────────────────────────────── */}
+        <Text style={styles.sectionTitle}>⏱ Session</Text>
         <View style={styles.punchCard}>
           {!todayPunch ? (
-            // Not punched in yet
-            <>
-              <Text style={styles.punchStatus}>No session today</Text>
-              <Text style={styles.punchSub}>Take a selfie to start your session</Text>
+            <View style={styles.punchRow}>
+              <View>
+                <Text style={styles.punchLabel}>No session yet</Text>
+                <Text style={styles.punchSub}>Selfie required to start</Text>
+              </View>
               <TouchableOpacity style={styles.punchInBtn} onPress={() => openModal('punch-in')}>
                 <Text style={styles.punchBtnText}>📸 Punch In</Text>
               </TouchableOpacity>
-            </>
+            </View>
           ) : !todayPunch.checkoutAt ? (
-            // Active session
-            <>
-              <View style={styles.punchActiveRow}>
-                <View style={styles.punchDot} />
-                <Text style={styles.punchActiveText}>Session Active</Text>
+            <View style={styles.punchRow}>
+              <View>
+                <View style={styles.punchActiveRow}>
+                  <View style={styles.punchDot} />
+                  <Text style={styles.punchActiveLabel}>Active · {punchMins} min</Text>
+                </View>
+                <Text style={styles.punchSub}>Since {format(new Date(todayPunch.submittedAt), 'hh:mm a')}</Text>
               </View>
-              <Text style={styles.punchBig}>{punchDurationMins} min</Text>
-              <Text style={styles.punchSub}>
-                Started {format(new Date(todayPunch.submittedAt), 'hh:mm a')}
-              </Text>
               <TouchableOpacity style={styles.punchOutBtn} onPress={() => openModal('punch-out')}>
                 <Text style={styles.punchBtnText}>📸 Punch Out</Text>
               </TouchableOpacity>
-            </>
+            </View>
           ) : (
-            // Session complete
-            <>
-              <Text style={styles.punchDoneIcon}>✅</Text>
-              <Text style={styles.punchStatus}>Session Complete</Text>
-              <Text style={styles.punchBig}>{todayPunch.durationMins} min</Text>
-              <Text style={styles.punchSub}>
-                {format(new Date(todayPunch.submittedAt), 'hh:mm a')} – {format(new Date(todayPunch.checkoutAt), 'hh:mm a')}
-              </Text>
-            </>
-          )}
-        </View>
-
-        {/* ── SECTION 2: Photo Checks ─────────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>📸 Photo Checks</Text>
-        <View style={styles.photoSection}>
-          <View style={styles.photoHeader}>
-            <View>
-              <Text style={styles.photoCount}>{photoChecks.length} today</Text>
-              <Text style={styles.photoSub}>Multiple allowed · manual or via notification</Text>
-            </View>
-            <TouchableOpacity style={styles.photoBtn} onPress={() => openModal('photo')}>
-              <Text style={styles.photoBtnText}>+ Add Photo</Text>
-            </TouchableOpacity>
-          </View>
-
-          {photoChecks.length > 0 && (
-            <View style={styles.photoList}>
-              {photoChecks.map((c: any) => (
-                <View key={c.id} style={styles.photoItem}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.photoActivity} numberOfLines={2}>{c.activity || '(no description)'}</Text>
-                    <Text style={styles.photoTime}>{format(new Date(c.submittedAt), 'hh:mm a')}</Text>
-                  </View>
-                  <Text style={[
-                    styles.photoStatus,
-                    c.status === 'approved' ? { color: Colors.success } :
-                    c.status === 'rejected' ? { color: Colors.danger } : { color: Colors.textSecondary },
-                  ]}>
-                    {c.status === 'approved' ? '✅' : c.status === 'rejected' ? '❌' : '⏳'}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-
-        {/* ── SECTION 3: Today's Summary ──────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>📝 {reportLabel}</Text>
-        <TouchableOpacity
-          style={[styles.summaryCard, todaySummary && { borderColor: Colors.success }]}
-          onPress={() => router.push('/(student)/summary')}
-        >
-          <Text style={styles.summaryIcon}>{todaySummary ? '✅' : '📝'}</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.summaryTitle}>{todaySummary ? `${reportLabel} Submitted` : `Submit ${reportLabel}`}</Text>
-            <Text style={styles.summarySub}>{todaySummary ? 'Tap to view or edit' : 'Due by 11:00 PM'}</Text>
-          </View>
-          <Text style={styles.summaryArrow}>›</Text>
-        </TouchableOpacity>
-
-        {/* ── Schedule ────────────────────────────────────────────────────── */}
-        {schedules.length > 0 && (
-          <>
-            <Text style={styles.sectionTitle}>📅 Today's Schedule</Text>
-            {schedules.slice(0, 3).map((s: any) => (
-              <View key={s.id} style={styles.scheduleItem}>
-                <Text style={styles.scheduleTime}>{s.startTime} – {s.endTime}</Text>
-                <Text style={styles.scheduleTitle}>{s.title}</Text>
+            <View style={styles.punchRow}>
+              <View>
+                <Text style={styles.punchDoneLabel}>✅ Session Complete</Text>
+                <Text style={styles.punchSub}>
+                  {format(new Date(todayPunch.submittedAt), 'hh:mm a')} – {format(new Date(todayPunch.checkoutAt), 'hh:mm a')} · {todayPunch.durationMins} min
+                </Text>
               </View>
-            ))}
-          </>
-        )}
+            </View>
+          )}
+        </View>
+
+        {/* ── Today's Stats ───────────────────────────────────────── */}
+        <Text style={styles.sectionTitle}>📊 Today</Text>
+        <View style={styles.statsRow}>
+          {/* Photo checks */}
+          <TouchableOpacity style={styles.statCard} onPress={() => router.push('/(student)/checks')}>
+            <Text style={styles.statNum}>{photoCount}</Text>
+            <Text style={styles.statLabel}>Photo Checks</Text>
+            <Text style={styles.statAction}>View →</Text>
+          </TouchableOpacity>
+
+          {/* Summary */}
+          <TouchableOpacity
+            style={[styles.statCard, todaySummary && { borderColor: Colors.success }]}
+            onPress={() => router.push('/(student)/summary')}
+          >
+            <Text style={styles.statNum}>{todaySummary ? '✅' : '📝'}</Text>
+            <Text style={styles.statLabel}>{reportLabel}</Text>
+            <Text style={[styles.statAction, !todaySummary && { color: Colors.danger }]}>
+              {todaySummary ? 'View →' : 'Submit →'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Quick Actions ───────────────────────────────────────── */}
+        <Text style={styles.sectionTitle}>Quick Actions</Text>
+        <View style={styles.actionsRow}>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => openModal('photo')}>
+            <Text style={styles.actionIcon}>📸</Text>
+            <Text style={styles.actionLabel}>{activityLabel}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => router.push('/(student)/summary')}>
+            <Text style={styles.actionIcon}>📝</Text>
+            <Text style={styles.actionLabel}>{todaySummary ? 'View Summary' : 'Add Summary'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => router.push('/(student)/checks')}>
+            <Text style={styles.actionIcon}>🖼️</Text>
+            <Text style={styles.actionLabel}>My Checks</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => router.push('/(student)/schedule')}>
+            <Text style={styles.actionIcon}>📅</Text>
+            <Text style={styles.actionLabel}>Schedule</Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={{ height: 32 }} />
       </ScrollView>
 
-      {/* ── Camera Modal (shared for all 3 actions) ───────────────────────── */}
+      {/* ── Camera Modal ─────────────────────────────────────────── */}
       <Modal visible={!!activeModal} animationType="slide" onRequestClose={() => setActiveModal(null)}>
         {phase === 'camera' ? (
           <View style={{ flex: 1 }}>
@@ -289,28 +265,30 @@ export default function StudentHome() {
                   <Text style={styles.camHintText}>
                     {activeModal === 'punch-in'  && 'Take a selfie to start your session'}
                     {activeModal === 'punch-out' && 'Take a selfie to end your session'}
-                    {activeModal === 'photo'     && 'Snap a photo of what you\'re doing'}
+                    {activeModal === 'photo'     && "Snap what you're working on"}
                   </Text>
                   <Text style={styles.camHintSub}>Camera only — no uploads from gallery</Text>
                 </View>
-                <TouchableOpacity style={styles.captureBtn} onPress={takePhoto}>
-                  <View style={styles.captureInner} />
-                </TouchableOpacity>
+                {submitting
+                  ? <ActivityIndicator color="#fff" size="large" style={{ alignSelf: 'center' }} />
+                  : (
+                    <TouchableOpacity style={styles.captureBtn} onPress={takePhoto}>
+                      <View style={styles.captureInner} />
+                    </TouchableOpacity>
+                  )}
               </View>
             </CameraView>
           </View>
         ) : (
-          // Form phase — only for photo checks
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <ScrollView style={styles.formSheet} contentContainerStyle={{ padding: 24, paddingTop: 56, gap: 16 }}>
               <Text style={styles.formTitle}>📸 Photo Check</Text>
-              <Text style={styles.formSub}>Photo captured. Describe what you're doing right now.</Text>
-              <Text style={styles.label}>What are you working on? *</Text>
+              <Text style={styles.formSub}>Photo captured. What are you working on?</Text>
               <TextInput
                 style={styles.textarea}
                 value={activity}
                 onChangeText={setActivity}
-                placeholder="e.g. Chapter 5 revision, solving practice problems..."
+                placeholder="e.g. Chapter 5 revision, solving problems..."
                 multiline
                 numberOfLines={4}
                 autoFocus
@@ -320,27 +298,15 @@ export default function StudentHome() {
                 onPress={() => handleSubmit()}
                 disabled={submitting}
               >
-                {submitting
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={styles.submitBtnText}>Submit Photo Check ✓</Text>}
+                {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitBtnText}>Submit ✓</Text>}
               </TouchableOpacity>
               <TouchableOpacity onPress={() => setPhase('camera')} style={styles.retakeBtn}>
-                <Text style={styles.retakeBtnText}>↩ Retake Photo</Text>
+                <Text style={styles.retakeBtnText}>↩ Retake</Text>
               </TouchableOpacity>
             </ScrollView>
           </KeyboardAvoidingView>
         )}
       </Modal>
-
-      {/* Submitting overlay for punch in/out (no form step) */}
-      {submitting && (activeModal === 'punch-in' || activeModal === 'punch-out') && (
-        <View style={styles.submittingOverlay}>
-          <ActivityIndicator color={Colors.primary} size="large" />
-          <Text style={styles.submittingText}>
-            {activeModal === 'punch-in' ? 'Punching In...' : 'Punching Out...'}
-          </Text>
-        </View>
-      )}
     </>
   );
 }
@@ -348,60 +314,41 @@ export default function StudentHome() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bg },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-
-  // Header
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 24, paddingTop: 56 },
-  greeting: { fontSize: 16, color: Colors.textSecondary },
-  name: { fontSize: 24, fontWeight: '800', color: Colors.text },
+  greeting: { fontSize: 15, color: Colors.textSecondary },
+  name: { fontSize: 22, fontWeight: '800', color: Colors.text },
   orgTag: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
   signOut: { color: Colors.danger, fontSize: 14, padding: 8 },
-
-  // Streak
-  streakCard: { flexDirection: 'row', alignItems: 'center', gap: 16, backgroundColor: Colors.primary, margin: 16, borderRadius: 16, padding: 20 },
-  streakIcon: { fontSize: 40 },
+  streakCard: { backgroundColor: Colors.primary, margin: 16, borderRadius: 16, padding: 20, gap: 12 },
+  streakRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  streakIcon: { fontSize: 36 },
   streakNum: { fontSize: 20, fontWeight: '800', color: '#fff' },
   streakSub: { fontSize: 13, color: 'rgba(255,255,255,0.8)', marginTop: 2 },
-
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: Colors.text, marginHorizontal: 16, marginTop: 20, marginBottom: 10 },
-
+  quote: { fontSize: 13, color: 'rgba(255,255,255,0.85)', fontStyle: 'italic', lineHeight: 20 },
+  sectionTitle: { fontSize: 17, fontWeight: '700', color: Colors.text, marginHorizontal: 16, marginTop: 20, marginBottom: 10 },
   // Punch card
-  punchCard: { backgroundColor: Colors.white, marginHorizontal: 16, borderRadius: 16, padding: 20, alignItems: 'center', gap: 8, borderWidth: 1.5, borderColor: Colors.border },
-  punchActiveRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  punchDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.success },
-  punchActiveText: { fontSize: 14, fontWeight: '700', color: Colors.success },
-  punchDoneIcon: { fontSize: 32 },
-  punchStatus: { fontSize: 16, fontWeight: '600', color: Colors.text },
-  punchBig: { fontSize: 40, fontWeight: '800', color: Colors.text },
-  punchSub: { fontSize: 13, color: Colors.textSecondary },
-  punchInBtn: { backgroundColor: Colors.primary, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32, marginTop: 8 },
-  punchOutBtn: { backgroundColor: Colors.success, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32, marginTop: 8 },
-  punchBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-
-  // Photo section
-  photoSection: { backgroundColor: Colors.white, marginHorizontal: 16, borderRadius: 16, padding: 16, borderWidth: 1.5, borderColor: Colors.border },
-  photoHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  photoCount: { fontSize: 16, fontWeight: '700', color: Colors.text },
-  photoSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
-  photoBtn: { backgroundColor: Colors.primary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16 },
-  photoBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
-  photoList: { marginTop: 12, gap: 8 },
-  photoItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: Colors.border },
-  photoActivity: { fontSize: 14, color: Colors.text, fontWeight: '500' },
-  photoTime: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
-  photoStatus: { fontSize: 18, marginLeft: 8 },
-
-  // Summary
-  summaryCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.white, marginHorizontal: 16, borderRadius: 16, padding: 16, borderWidth: 1.5, borderColor: Colors.border, gap: 12 },
-  summaryIcon: { fontSize: 28 },
-  summaryTitle: { fontSize: 15, fontWeight: '700', color: Colors.text },
-  summarySub: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
-  summaryArrow: { fontSize: 24, color: Colors.textSecondary },
-
-  // Schedule
-  scheduleItem: { backgroundColor: Colors.white, marginHorizontal: 16, marginBottom: 8, borderRadius: 12, padding: 14, borderLeftWidth: 4, borderLeftColor: Colors.primary },
-  scheduleTime: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
-  scheduleTitle: { fontSize: 15, color: Colors.text, fontWeight: '600', marginTop: 2 },
-
+  punchCard: { backgroundColor: Colors.white, marginHorizontal: 16, borderRadius: 14, padding: 16, borderWidth: 1.5, borderColor: Colors.border },
+  punchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  punchLabel: { fontSize: 15, fontWeight: '600', color: Colors.text },
+  punchSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 3 },
+  punchActiveRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  punchDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.success },
+  punchActiveLabel: { fontSize: 15, fontWeight: '700', color: Colors.success },
+  punchDoneLabel: { fontSize: 15, fontWeight: '600', color: Colors.text },
+  punchInBtn: { backgroundColor: Colors.primary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16 },
+  punchOutBtn: { backgroundColor: Colors.success, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16 },
+  punchBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  // Stats
+  statsRow: { flexDirection: 'row', gap: 12, marginHorizontal: 16 },
+  statCard: { flex: 1, backgroundColor: Colors.white, borderRadius: 14, padding: 16, alignItems: 'center', gap: 4, borderWidth: 1.5, borderColor: Colors.border },
+  statNum: { fontSize: 28, fontWeight: '800', color: Colors.text },
+  statLabel: { fontSize: 12, color: Colors.textSecondary, textAlign: 'center' },
+  statAction: { fontSize: 12, fontWeight: '600', color: Colors.primary },
+  // Quick actions
+  actionsRow: { flexDirection: 'row', gap: 10, marginHorizontal: 16, flexWrap: 'wrap' },
+  actionBtn: { flex: 1, minWidth: '22%', backgroundColor: Colors.white, borderRadius: 12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: Colors.border },
+  actionIcon: { fontSize: 26 },
+  actionLabel: { fontSize: 11, color: Colors.text, fontWeight: '600', marginTop: 6, textAlign: 'center' },
   // Camera
   camOverlay: { flex: 1, justifyContent: 'space-between', padding: 24, paddingTop: 56, paddingBottom: 48, backgroundColor: 'rgba(0,0,0,0.35)' },
   camHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -412,19 +359,12 @@ const styles = StyleSheet.create({
   camHintSub: { color: 'rgba(255,255,255,0.7)', fontSize: 13, marginTop: 4 },
   captureBtn: { alignSelf: 'center', width: 76, height: 76, borderRadius: 38, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
   captureInner: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#fff' },
-
-  // Form sheet
   formSheet: { flex: 1, backgroundColor: Colors.bg },
-  formTitle: { fontSize: 24, fontWeight: '800', color: Colors.text },
+  formTitle: { fontSize: 22, fontWeight: '800', color: Colors.text },
   formSub: { fontSize: 14, color: Colors.textSecondary },
-  label: { fontSize: 15, fontWeight: '600', color: Colors.text },
   textarea: { backgroundColor: Colors.white, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: Colors.border, fontSize: 15, color: Colors.text, textAlignVertical: 'top', minHeight: 100 },
   submitBtn: { backgroundColor: Colors.primary, borderRadius: 12, padding: 16, alignItems: 'center' },
   submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   retakeBtn: { alignItems: 'center', padding: 12 },
   retakeBtnText: { color: Colors.textSecondary, fontSize: 14 },
-
-  // Submitting overlay
-  submittingOverlay: { position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', gap: 16 },
-  submittingText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });

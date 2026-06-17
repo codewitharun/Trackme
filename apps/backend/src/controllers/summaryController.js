@@ -58,6 +58,15 @@ exports.submitSummary = async (req, res) => {
     const newStreak = !prevSummary.empty ? (req.user.streak || 0) + 1 : 1;
     await db.collection('users').doc(req.user.uid).update({ streak: newStreak, lastSummaryDate: today });
 
+    // Notify teacher
+    if (summary.teacherId) {
+      try {
+        const teacherDoc = await db.collection('users').doc(summary.teacherId).get();
+        const token = teacherDoc.data()?.fcmToken;
+        if (token) await sendPushNotifications([token], '📝 Summary Submitted', `${req.user.name} submitted their daily summary`, { type: 'SUMMARY_SUBMIT' });
+      } catch (e) { console.warn('[SUMMARY NOTIFY]', e.message); }
+    }
+
     res.status(isUpdate ? 200 : 201).json({ id: ref.id, streak: newStreak, isOnTime, ...summary });
   } catch (err) {
     res.status(500).json({ error: err.message });

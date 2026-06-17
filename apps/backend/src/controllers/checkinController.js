@@ -1,6 +1,18 @@
 const { db } = require('../services/firebase');
 const { sendPushNotifications } = require('../services/push');
 
+// Notify the student's assigned teacher
+async function notifyTeacher(teacherId, title, body, data = {}) {
+  if (!teacherId) return;
+  try {
+    const doc = await db.collection('users').doc(teacherId).get();
+    const token = doc.data()?.fcmToken;
+    if (token) await sendPushNotifications([token], title, body, data);
+  } catch (e) {
+    console.warn('[NOTIFY TEACHER]', e.message);
+  }
+}
+
 // ── Punch In ──────────────────────────────────────────────────────────────────
 // One per day. Selfie required (anti-cheat). Tracks session duration via checkout.
 exports.punchIn = async (req, res) => {
@@ -44,6 +56,7 @@ exports.punchIn = async (req, res) => {
 
     const ref = await db.collection('checkins').add(record);
     console.log(`[CHECKIN] punch-in: ${req.user.uid} at ${now.toISOString()}`);
+    notifyTeacher(record.teacherId, '⏱ Student Punched In', `${req.user.name} has started their session`, { type: 'PUNCH_IN' });
     res.status(201).json({ id: ref.id, ...record });
   } catch (err) {
     console.error('[CHECKIN] punchIn error:', err.message);
@@ -82,6 +95,7 @@ exports.checkoutCheckin = async (req, res) => {
     });
 
     console.log(`[CHECKIN] punch-out: ${req.user.uid}, duration: ${durationMins}m`);
+    notifyTeacher(data.teacherId, '🏁 Student Punched Out', `${req.user.name} ended session — ${durationMins} mins`, { type: 'PUNCH_OUT' });
     res.json({ checkoutAt, durationMins });
   } catch (err) {
     console.error('[CHECKIN] checkout error:', err.message);
@@ -121,6 +135,7 @@ exports.submitCheckin = async (req, res) => {
     });
 
     console.log(`[CHECKIN] photo check: ${req.user.uid}`);
+    notifyTeacher(checkin.teacherId, '📸 Photo Check Submitted', `${req.user.name}: ${checkin.activity || 'No description'}`, { type: 'PHOTO_CHECK' });
     res.status(201).json({ id: ref.id, ...checkin });
   } catch (err) {
     console.error('[CHECKIN] submitCheckin error:', err.message);
