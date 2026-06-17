@@ -17,7 +17,8 @@ type CameraPhase = 'camera' | 'form';
 export default function StudentHome() {
   const { profile, org, signOut } = useAuth();
   const router = useRouter();
-  const today = format(new Date(), 'yyyy-MM-dd');
+  // Use UTC date — server stores dates in UTC, must match
+  const today = new Date().toISOString().split('T')[0];
 
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -41,17 +42,28 @@ export default function StudentHome() {
   const reportLabel   = org?.reportLabel   || 'Daily Report';
 
   const load = useCallback(async () => {
-    try {
-      const [allCheckins, summaries, scheds] = await Promise.all([
-        getCheckins({ date: today }),
-        getSummaries({ date: today }),
-        getSchedules(),
-      ]);
-      setTodayPunch(allCheckins.find((c: any) => c.type === 'punch') || null);
-      setPhotoChecks(allCheckins.filter((c: any) => c.type === 'photo' || !c.type));
-      setTodaySummary(summaries[0] || null);
-      setSchedules(scheds);
-    } catch {}
+    // Fetch independently so one failure doesn't wipe out the rest
+    const [checkinsRes, summariesRes, schedsRes] = await Promise.allSettled([
+      getCheckins({ date: today }),
+      getSummaries({ date: today }),
+      getSchedules(),
+    ]);
+
+    if (checkinsRes.status === 'fulfilled') {
+      const all = checkinsRes.value;
+      console.log('[HOME] checkins loaded:', all.length, 'date:', today);
+      setTodayPunch(all.find((c: any) => c.type === 'punch') || null);
+      setPhotoChecks(all.filter((c: any) => c.type === 'photo' || !c.type));
+    } else {
+      console.warn('[HOME] checkins failed:', checkinsRes.reason?.message);
+    }
+    if (summariesRes.status === 'fulfilled') {
+      setTodaySummary(summariesRes.value[0] || null);
+    }
+    if (schedsRes.status === 'fulfilled') {
+      setSchedules(schedsRes.value);
+    }
+
     setLoading(false);
     setRefreshing(false);
   }, [today]);

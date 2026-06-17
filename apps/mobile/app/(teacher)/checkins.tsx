@@ -15,7 +15,7 @@ export default function CheckinsScreen() {
   const [reviewing, setReviewing] = useState(false);
 
   const load = async () => {
-    const today = format(new Date(), 'yyyy-MM-dd');
+    const today = new Date().toISOString().split('T')[0];
     const data = await getCheckins({ date: today });
     setCheckins(data);
     setLoading(false);

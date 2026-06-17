@@ -40,8 +40,8 @@ export default function UsersScreen() {
       const data = await listUsers({ role });
       setUsers(data);
       if (role === 'student') {
-        // Fetch today's punch-ins so we can show status on each card
-        const today = format(new Date(), 'yyyy-MM-dd');
+        // Use UTC date — server stores dates in UTC
+        const today = new Date().toISOString().split('T')[0];
         const punches = await getCheckins({ date: today, type: 'punch' });
         const map: Record<string, any> = {};
         punches.forEach((p: any) => { map[p.studentId] = p; });

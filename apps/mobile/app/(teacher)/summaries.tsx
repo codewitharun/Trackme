@@ -18,7 +18,7 @@ export default function SummariesScreen() {
   const [rating, setRating] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
-  const today = format(new Date(), 'yyyy-MM-dd');
+  const today = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
     getSummaries({ date: today }).then(setSummaries).finally(() => setLoading(false));

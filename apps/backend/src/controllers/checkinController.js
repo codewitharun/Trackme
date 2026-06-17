@@ -153,7 +153,7 @@ exports.getCheckins = async (req, res) => {
       .map(doc => ({ id: doc.id, ...doc.data() }))
       .sort((a, b) => (b.submittedAt > a.submittedAt ? 1 : -1));
 
-    if (type) checkins = checkins.filter((c: any) => (c.type || 'photo') === type);
+    if (type) checkins = checkins.filter(c => (c.type || 'photo') === type);
 
     res.json(checkins);
   } catch (err) {

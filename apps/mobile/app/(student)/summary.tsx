@@ -27,7 +27,7 @@ export default function SummaryScreen() {
   const [topics, setTopics] = useState('');
   const [mood, setMood] = useState('');
 
-  const today = format(new Date(), 'yyyy-MM-dd');
+  const today = new Date().toISOString().split('T')[0]; // UTC — matches server
 
   useEffect(() => {
     getSummaries({ date: today })

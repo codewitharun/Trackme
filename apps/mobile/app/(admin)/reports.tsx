@@ -18,7 +18,7 @@ export default function ReportsScreen() {
 
   const loadReport = async (r: 'today' | '7d' | '30d') => {
     setLoading(true);
-    const today = format(new Date(), 'yyyy-MM-dd');
+    const today = new Date().toISOString().split('T')[0];
     let from = today;
     if (r === '7d') from = format(subDays(new Date(), 6), 'yyyy-MM-dd');
     if (r === '30d') from = format(subDays(new Date(), 29), 'yyyy-MM-dd');
