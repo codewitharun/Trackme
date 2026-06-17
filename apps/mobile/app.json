@@ -31,7 +31,12 @@
     "android": {
       "package": "com.arun.trackme",
       "googleServicesFile": "./google-services.json",
-      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE"],
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#6366F1",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -43,6 +48,12 @@
     "web": {
       "bundler": "metro",
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "9d7b45cf-560d-4ffa-ae75-bd21d8f7fd57"
+      }
+    },
+    "owner": "appaura"
   }
 }
