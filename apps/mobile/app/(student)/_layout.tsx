@@ -10,11 +10,12 @@ export default function StudentLayout() {
         tabBarStyle: { borderTopWidth: 1, borderTopColor: Colors.border },
       }}
     >
-      <Tabs.Screen name="home" options={{ title: 'Home', tabBarIcon: () => null }} />
-      <Tabs.Screen name="checkin" options={{ title: 'Check-in', tabBarIcon: () => null }} />
-      <Tabs.Screen name="summary" options={{ title: 'Summary', tabBarIcon: () => null }} />
-      <Tabs.Screen name="schedule" options={{ title: 'Schedule', tabBarIcon: () => null }} />
-      <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: () => null }} />
+      <Tabs.Screen name="home"     options={{ title: 'Home' }} />
+      <Tabs.Screen name="summary"  options={{ title: 'Summary' }} />
+      <Tabs.Screen name="schedule" options={{ title: 'Schedule' }} />
+      <Tabs.Screen name="profile"  options={{ title: 'Profile' }} />
+      {/* checkin is now a modal inside home — hide from tab bar */}
+      <Tabs.Screen name="checkin"  options={{ href: null }} />
     </Tabs>
   );
 }

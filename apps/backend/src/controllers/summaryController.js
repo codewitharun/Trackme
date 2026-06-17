@@ -1,4 +1,5 @@
-const { db, messaging } = require('../services/firebase');
+const { db } = require('../services/firebase');
+const { sendPushNotifications } = require('../services/push');
 
 // Submit daily study summary (students submit by 11 PM daily)
 exports.submitSummary = async (req, res) => {
@@ -113,12 +114,8 @@ exports.addFeedback = async (req, res) => {
 
     // Notify student
     const student = await db.collection('users').doc(summary.data().studentId).get();
-    if (student.data()?.fcmToken) {
-      await messaging.send({
-        token: student.data().fcmToken,
-        notification: { title: '📝 Summary Feedback', body: feedback },
-      }).catch(() => {});
-    }
+    const token = student.data()?.fcmToken;
+    if (token) await sendPushNotifications([token], '📝 Summary Feedback', feedback);
 
     res.json({ message: 'Feedback added' });
   } catch (err) {

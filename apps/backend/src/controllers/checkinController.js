@@ -1,4 +1,5 @@
-const { db, messaging } = require('../services/firebase');
+const { db } = require('../services/firebase');
+const { sendPushNotifications } = require('../services/push');
 
 exports.submitCheckin = async (req, res) => {
   try {
@@ -92,14 +93,13 @@ exports.reviewCheckin = async (req, res) => {
     });
 
     const student = await db.collection('users').doc(checkin.data().studentId).get();
-    if (student.data()?.fcmToken) {
-      await messaging.send({
-        token: student.data().fcmToken,
-        notification: {
-          title: status === 'approved' ? '✅ Check-in Approved' : '❌ Check-in Rejected',
-          body: feedback || `Your check-in was ${status}`,
-        },
-      }).catch(() => {});
+    const token = student.data()?.fcmToken;
+    if (token) {
+      await sendPushNotifications(
+        [token],
+        status === 'approved' ? '✅ Check-in Approved' : '❌ Check-in Rejected',
+        feedback || `Your check-in was ${status}`
+      );
     }
 
     res.json({ message: 'Check-in reviewed' });
@@ -119,14 +119,7 @@ exports.triggerCheckinAlert = async (req, res) => {
     const tokens = snapshot.docs.map(d => d.data().fcmToken).filter(Boolean);
 
     if (tokens.length > 0) {
-      await messaging.sendEachForMulticast({
-        tokens,
-        notification: {
-          title: '📸 Study Check-in',
-          body: message || 'What are you studying right now? Snap a photo!',
-        },
-        data: { type: 'CHECKIN_PROMPT' },
-      });
+      await sendPushNotifications(tokens, '📸 Check-in Time', message || 'What are you doing right now? Snap a photo!', { type: 'CHECKIN_PROMPT' });
     }
 
     res.json({ message: 'Alert sent', recipients: tokens.length });
