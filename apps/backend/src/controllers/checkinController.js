@@ -11,16 +11,16 @@ exports.punchIn = async (req, res) => {
     const date = now.toISOString().split('T')[0];
 
     // Enforce one punch-in per day
-    const existing = await db.collection('checkins')
+    // Only single-field where clauses to avoid composite index requirement — filter type in memory
+    const existingSnap = await db.collection('checkins')
       .where('studentId', '==', req.user.uid)
-      .where('type', '==', 'punch')
       .where('date', '==', date)
-      .limit(1).get();
+      .get();
+    const existingPunch = existingSnap.docs.map(d => d.data()).find(d => d.type === 'punch');
 
-    if (!existing.empty) {
-      const punch = existing.docs[0].data();
+    if (existingPunch) {
       return res.status(400).json({
-        error: punch.checkoutAt
+        error: existingPunch.checkoutAt
           ? 'Already punched in and out today'
           : 'Already punched in — punch out first',
       });
@@ -145,12 +145,15 @@ exports.getCheckins = async (req, res) => {
 
     if (date)   query = query.where('date',   '==', date);
     if (status) query = query.where('status', '==', status);
-    if (type)   query = query.where('type',   '==', type);
+    // NOTE: do NOT add type as a Firestore filter — composite index not set up.
+    // Filter in memory below.
 
-    const snapshot = await query.limit(100).get();
-    const checkins = snapshot.docs
+    const snapshot = await query.limit(200).get();
+    let checkins = snapshot.docs
       .map(doc => ({ id: doc.id, ...doc.data() }))
       .sort((a, b) => (b.submittedAt > a.submittedAt ? 1 : -1));
+
+    if (type) checkins = checkins.filter((c: any) => (c.type || 'photo') === type);
 
     res.json(checkins);
   } catch (err) {
