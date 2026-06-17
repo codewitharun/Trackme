@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "TrackMe",
+    "slug": "TrackMe",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "trackme",
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      "expo-camera",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#6366F1"
+        }
+      ]
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.arun.trackme",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "NSCameraUsageDescription": "TrackMe needs camera access for study check-ins",
+        "NSPhotoLibraryUsageDescription": "TrackMe needs photo access"
+      }
+    },
+    "android": {
+      "package": "com.arun.trackme",
+      "googleServicesFile": "./google-services.json",
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE"],
+      "adaptiveIcon": {
+        "backgroundColor": "#6366F1",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

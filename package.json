@@ -1,0 +1,11 @@
+{
+  "name": "trackme-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "mobile": "cd apps/mobile && npx expo start",
+    "backend": "cd apps/backend && npm run dev",
+    "install:mobile": "cd apps/mobile && npm install",
+    "install:backend": "cd apps/backend && npm install"
+  }
+}

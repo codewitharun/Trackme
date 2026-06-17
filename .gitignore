@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Environment files — never commit these
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Expo
+.expo/
+dist/
+build/
+web-build/
+
+# Firebase native config (download from Firebase Console)
+apps/mobile/google-services.json
+apps/mobile/GoogleService-Info.plist
+
+# Android / iOS generated
+apps/mobile/android/
+apps/mobile/ios/
+
+# EAS
+.eas/
+
+# Editor
+.vscode/
+.idea/
