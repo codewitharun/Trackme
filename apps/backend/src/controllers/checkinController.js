@@ -1,6 +1,96 @@
 const { db } = require('../services/firebase');
 const { sendPushNotifications } = require('../services/push');
 
+// ── Punch In ──────────────────────────────────────────────────────────────────
+// One per day. Selfie required (anti-cheat). Tracks session duration via checkout.
+exports.punchIn = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Selfie is required to punch in' });
+
+    const now  = new Date();
+    const date = now.toISOString().split('T')[0];
+
+    // Enforce one punch-in per day
+    const existing = await db.collection('checkins')
+      .where('studentId', '==', req.user.uid)
+      .where('type', '==', 'punch')
+      .where('date', '==', date)
+      .limit(1).get();
+
+    if (!existing.empty) {
+      const punch = existing.docs[0].data();
+      return res.status(400).json({
+        error: punch.checkoutAt
+          ? 'Already punched in and out today'
+          : 'Already punched in — punch out first',
+      });
+    }
+
+    const record = {
+      type:          'punch',
+      studentId:     req.user.uid,
+      studentName:   req.user.name,
+      teacherId:     req.user.teacherId || null,
+      organisationId: req.user.organisationId || null,
+      imageUrl:      req.file.path,
+      imagePublicId: req.file.filename,
+      submittedAt:   now.toISOString(),
+      date,
+      checkoutAt:    null,
+      durationMins:  null,
+      punchOutImageUrl:      null,
+      punchOutImagePublicId: null,
+    };
+
+    const ref = await db.collection('checkins').add(record);
+    console.log(`[CHECKIN] punch-in: ${req.user.uid} at ${now.toISOString()}`);
+    res.status(201).json({ id: ref.id, ...record });
+  } catch (err) {
+    console.error('[CHECKIN] punchIn error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ── Punch Out ─────────────────────────────────────────────────────────────────
+// Selfie required (anti-cheat). Closes the punch session.
+exports.checkoutCheckin = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!req.file) return res.status(400).json({ error: 'Selfie is required to punch out' });
+
+    const ref = db.collection('checkins').doc(id);
+    const doc = await ref.get();
+
+    if (!doc.exists) return res.status(404).json({ error: 'Record not found' });
+
+    const data = doc.data();
+    if (data.studentId !== req.user.uid) return res.status(403).json({ error: 'Not your record' });
+    if (data.type !== 'punch') return res.status(400).json({ error: 'Can only punch out a punch-in record' });
+    if (data.checkoutAt) return res.status(400).json({ error: 'Already punched out' });
+
+    const checkoutAt = new Date().toISOString();
+    const durationMins = Math.round(
+      (new Date(checkoutAt) - new Date(data.submittedAt)) / 60000
+    );
+
+    await ref.update({
+      checkoutAt,
+      durationMins,
+      punchOutImageUrl:      req.file.path,
+      punchOutImagePublicId: req.file.filename,
+    });
+
+    console.log(`[CHECKIN] punch-out: ${req.user.uid}, duration: ${durationMins}m`);
+    res.json({ checkoutAt, durationMins });
+  } catch (err) {
+    console.error('[CHECKIN] checkout error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ── Photo Check-in ────────────────────────────────────────────────────────────
+// Multiple per day. Image required. Random notifications or manual.
 exports.submitCheckin = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Image is required' });
@@ -9,17 +99,19 @@ exports.submitCheckin = async (req, res) => {
     const now = new Date();
 
     const checkin = {
-      studentId: req.user.uid,
-      studentName: req.user.name,
-      teacherId: req.user.teacherId,
-      imageUrl: req.file.path,
+      type:          'photo',
+      studentId:     req.user.uid,
+      studentName:   req.user.name,
+      teacherId:     req.user.teacherId || null,
+      organisationId: req.user.organisationId || null,
+      imageUrl:      req.file.path,
       imagePublicId: req.file.filename,
-      activity: activity || '',
-      scheduleId: scheduleId || null,
-      submittedAt: now.toISOString(),
-      date: now.toISOString().split('T')[0],
-      status: 'submitted',
-      feedback: null,
+      activity:      activity || '',
+      scheduleId:    scheduleId || null,
+      submittedAt:   now.toISOString(),
+      date:          now.toISOString().split('T')[0],
+      status:        'submitted',
+      feedback:      null,
     };
 
     const ref = await db.collection('checkins').add(checkin);
@@ -28,6 +120,7 @@ exports.submitCheckin = async (req, res) => {
       lastCheckinAt: now.toISOString(),
     });
 
+    console.log(`[CHECKIN] photo check: ${req.user.uid}`);
     res.status(201).json({ id: ref.id, ...checkin });
   } catch (err) {
     console.error('[CHECKIN] submitCheckin error:', err.message);
@@ -35,12 +128,12 @@ exports.submitCheckin = async (req, res) => {
   }
 };
 
+// ── Get Check-ins (both types) ────────────────────────────────────────────────
 exports.getCheckins = async (req, res) => {
   try {
-    const { date, studentId, status } = req.query;
+    const { date, studentId, status, type } = req.query;
     let query = db.collection('checkins');
 
-    // Role-based filtering — only equality filters (no orderBy) to avoid index requirement
     if (req.user.role === 'student') {
       query = query.where('studentId', '==', req.user.uid);
     } else if (req.user.role === 'teacher') {
@@ -50,17 +143,15 @@ exports.getCheckins = async (req, res) => {
       if (studentId) query = query.where('studentId', '==', studentId);
     }
 
-    if (date) query = query.where('date', '==', date);
+    if (date)   query = query.where('date',   '==', date);
     if (status) query = query.where('status', '==', status);
+    if (type)   query = query.where('type',   '==', type);
 
     const snapshot = await query.limit(100).get();
-
-    // Sort in memory — avoids composite index requirement
     const checkins = snapshot.docs
       .map(doc => ({ id: doc.id, ...doc.data() }))
       .sort((a, b) => (b.submittedAt > a.submittedAt ? 1 : -1));
 
-    console.log(`[CHECKIN] getCheckins → ${checkins.length} results for role=${req.user.role}`);
     res.json(checkins);
   } catch (err) {
     console.error('[CHECKIN] getCheckins error:', err.message);
@@ -68,6 +159,7 @@ exports.getCheckins = async (req, res) => {
   }
 };
 
+// ── Review Photo Check-in ─────────────────────────────────────────────────────
 exports.reviewCheckin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -87,7 +179,7 @@ exports.reviewCheckin = async (req, res) => {
 
     await checkinRef.update({
       status,
-      feedback: feedback || null,
+      feedback:   feedback || null,
       reviewedAt: new Date().toISOString(),
       reviewedBy: req.user.uid,
     });
@@ -109,6 +201,7 @@ exports.reviewCheckin = async (req, res) => {
   }
 };
 
+// ── Trigger random photo alert ────────────────────────────────────────────────
 exports.triggerCheckinAlert = async (req, res) => {
   try {
     const { message } = req.body;
@@ -119,35 +212,17 @@ exports.triggerCheckinAlert = async (req, res) => {
     const tokens = snapshot.docs.map(d => d.data().fcmToken).filter(Boolean);
 
     if (tokens.length > 0) {
-      await sendPushNotifications(tokens, '📸 Check-in Time', message || 'What are you doing right now? Snap a photo!', { type: 'CHECKIN_PROMPT' });
+      await sendPushNotifications(
+        tokens,
+        '📸 Photo Check',
+        message || 'Snap a quick photo — what are you working on?',
+        { type: 'PHOTO_CHECK_PROMPT' }
+      );
     }
 
     res.json({ message: 'Alert sent', recipients: tokens.length });
   } catch (err) {
     console.error('[CHECKIN] triggerCheckinAlert error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-};
-
-exports.checkoutCheckin = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const ref = db.collection('checkins').doc(id);
-    const doc = await ref.get();
-
-    if (!doc.exists) return res.status(404).json({ error: 'Check-in not found' });
-    if (doc.data().studentId !== req.user.uid) return res.status(403).json({ error: 'Not your check-in' });
-    if (doc.data().checkoutAt) return res.status(400).json({ error: 'Already checked out' });
-
-    const checkoutAt = new Date().toISOString();
-    const durationMins = Math.round(
-      (new Date(checkoutAt) - new Date(doc.data().submittedAt)) / 60000
-    );
-
-    await ref.update({ checkoutAt, durationMins });
-    res.json({ checkoutAt, durationMins });
-  } catch (err) {
-    console.error('[CHECKIN] checkout error:', err.message);
     res.status(500).json({ error: err.message });
   }
 };

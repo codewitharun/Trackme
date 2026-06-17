@@ -1,68 +1,52 @@
-import { format } from "date-fns";
-import { CameraView, useCameraPermissions } from "expo-camera";
-import { useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from "react-native";
-import { Colors } from "../../constants/colors";
-import { useAuth } from "../../hooks/useAuth";
-import {
-  checkoutCheckin,
-  getCheckins,
-  getSchedules,
-  getSummaries,
-  submitCheckin,
-} from "../../services/api";
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  RefreshControl, ActivityIndicator, Alert, Modal,
+  TextInput, KeyboardAvoidingView, Platform,
+} from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useRouter } from 'expo-router';
+import { useAuth } from '../../hooks/useAuth';
+import { getCheckins, getSummaries, getSchedules, punchIn, checkoutCheckin, submitCheckin } from '../../services/api';
+import { Colors } from '../../constants/colors';
+import { format } from 'date-fns';
 
-type CheckinPhase = "camera" | "form";
+type ModalType = 'punch-in' | 'punch-out' | 'photo' | null;
+type CameraPhase = 'camera' | 'form';
 
 export default function StudentHome() {
   const { profile, org, signOut } = useAuth();
   const router = useRouter();
-  const today = format(new Date(), "yyyy-MM-dd");
+  const today = format(new Date(), 'yyyy-MM-dd');
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [todayCheckins, setTodayCheckins] = useState<any[]>([]);
+  const [todayPunch, setTodayPunch] = useState<any>(null);      // single punch record
+  const [photoChecks, setPhotoChecks] = useState<any[]>([]);   // multiple photo checks
   const [todaySummary, setTodaySummary] = useState<any>(null);
-  const [schedules, setSchedules] = useState<any[]>([]);
+  const [schedules, setSchedules]   = useState<any[]>([]);
 
-  // Check-in modal
-  const [showCheckin, setShowCheckin] = useState(false);
-  const [checkinPhase, setCheckinPhase] = useState<CheckinPhase>("camera");
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [activity, setActivity] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  // Modal state
+  const [activeModal, setActiveModal] = useState<ModalType>(null);
+  const [phase, setPhase]             = useState<CameraPhase>('camera');
+  const [photoUri, setPhotoUri]       = useState<string | null>(null);
+  const [activity, setActivity]       = useState('');
+  const [submitting, setSubmitting]   = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
 
-  // Checkout modal
-  const [showCheckout, setShowCheckout] = useState(false);
-  const [checkingOut, setCheckingOut] = useState(false);
-
-  const activityLabel = org?.activityLabel || "Check-in";
-  const reportLabel = org?.reportLabel || "Daily Report";
+  const activityLabel = org?.activityLabel || 'Check-in';
+  const reportLabel   = org?.reportLabel   || 'Daily Report';
 
   const load = useCallback(async () => {
     try {
-      const [checkins, summaries, scheds] = await Promise.all([
+      const [allCheckins, summaries, scheds] = await Promise.all([
         getCheckins({ date: today }),
         getSummaries({ date: today }),
         getSchedules(),
       ]);
-      setTodayCheckins(checkins);
+      setTodayPunch(allCheckins.find((c: any) => c.type === 'punch') || null);
+      setPhotoChecks(allCheckins.filter((c: any) => c.type === 'photo' || !c.type));
       setTodaySummary(summaries[0] || null);
       setSchedules(scheds);
     } catch {}
@@ -70,28 +54,15 @@ export default function StudentHome() {
     setRefreshing(false);
   }, [today]);
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
-  const activeSession = todayCheckins.find((c) => !c.checkoutAt);
-
-  // ── Check-in ───────────────────────────────────────────────────────────────
-  const openCheckin = async () => {
+  // ── Camera helpers ─────────────────────────────────────────────────────────
+  const openModal = async (type: ModalType) => {
     if (!permission?.granted) {
       const { granted } = await requestPermission();
-      if (!granted) {
-        Alert.alert(
-          "Camera Required",
-          "Camera permission is needed for check-in.",
-        );
-        return;
-      }
+      if (!granted) { Alert.alert('Camera Required', 'Camera permission is needed.'); return; }
     }
-    setPhotoUri(null);
-    setActivity("");
-    setCheckinPhase("camera");
-    setShowCheckin(true);
+    setPhotoUri(null); setActivity(''); setPhase('camera'); setActiveModal(type);
   };
 
   const takePhoto = async () => {
@@ -99,262 +70,174 @@ export default function StudentHome() {
     const photo = await cameraRef.current.takePictureAsync({ quality: 0.7 });
     if (photo?.uri) {
       setPhotoUri(photo.uri);
-      setCheckinPhase("form");
+      // Photo checks have a form step; punch in/out submit directly after photo
+      if (activeModal === 'photo') {
+        setPhase('form');
+      } else {
+        handleSubmit(photo.uri);
+      }
     }
   };
 
-  const handleSubmitCheckin = async () => {
-    if (!photoUri || !activity.trim()) {
-      Alert.alert("Required", "Describe what you are doing");
-      return;
-    }
+  const handleSubmit = async (uri?: string) => {
+    const imageUri = uri || photoUri;
+    if (!imageUri) return;
     setSubmitting(true);
     try {
-      const formData = new FormData();
-      formData.append("image", {
-        uri: photoUri,
-        type: "image/jpeg",
-        name: "checkin.jpg",
-      } as any);
-      formData.append("activity", activity.trim());
-      await submitCheckin(formData);
-      setShowCheckin(false);
+      const fd = new FormData();
+      fd.append('image', { uri: imageUri, type: 'image/jpeg', name: 'photo.jpg' } as any);
+
+      if (activeModal === 'punch-in') {
+        await punchIn(fd);
+        Alert.alert('✅ Punched In', 'Session started. Remember to punch out when done.');
+      } else if (activeModal === 'punch-out' && todayPunch) {
+        const res = await checkoutCheckin(todayPunch.id, fd);
+        Alert.alert('🏁 Punched Out', `Session duration: ${res.durationMins} minutes`);
+      } else if (activeModal === 'photo') {
+        if (!activity.trim()) { setSubmitting(false); Alert.alert('Required', 'Describe what you are doing'); return; }
+        fd.append('activity', activity.trim());
+        await submitCheckin(fd);
+      }
+      setActiveModal(null);
       load();
     } catch (err: any) {
-      Alert.alert("Error", err.response?.data?.error || "Failed to submit");
+      Alert.alert('Error', err.response?.data?.error || 'Something went wrong');
     } finally {
       setSubmitting(false);
     }
   };
 
-  // ── Check-out ──────────────────────────────────────────────────────────────
-  const handleCheckout = async () => {
-    if (!activeSession) return;
-    setCheckingOut(true);
-    try {
-      const result = await checkoutCheckin(activeSession.id);
-      setShowCheckout(false);
-      Alert.alert(
-        "✅ Checked Out",
-        `Session duration: ${result.durationMins} minutes`,
-      );
-      load();
-    } catch (err: any) {
-      Alert.alert("Error", err.response?.data?.error || "Failed to check out");
-    } finally {
-      setCheckingOut(false);
-    }
-  };
-
   if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator color={Colors.primary} size="large" />
-      </View>
-    );
+    return <View style={styles.center}><ActivityIndicator color={Colors.primary} size="large" /></View>;
   }
 
   const hour = new Date().getHours();
-  const greeting =
-    hour < 12 ? "Good Morning" : hour < 17 ? "Good Afternoon" : "Good Evening";
-  const sessionDuration = activeSession
-    ? Math.round(
-        (Date.now() - new Date(activeSession.submittedAt).getTime()) / 60000,
-      )
-    : 0;
+  const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
+  const punchDurationMins = todayPunch && !todayPunch.checkoutAt
+    ? Math.round((Date.now() - new Date(todayPunch.submittedAt).getTime()) / 60000)
+    : todayPunch?.durationMins || 0;
 
   return (
     <>
       <ScrollView
         style={styles.container}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => {
-              setRefreshing(true);
-              load();
-            }}
-          />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} />}
       >
+        {/* Header */}
         <View style={styles.header}>
           <View>
             <Text style={styles.greeting}>{greeting},</Text>
             <Text style={styles.name}>{profile?.name} 👋</Text>
-            {org && (
-              <Text style={styles.orgTag}>
-                {org.icon} {org.name}
-              </Text>
-            )}
+            {org && <Text style={styles.orgTag}>{org.icon} {org.name}</Text>}
           </View>
-          <TouchableOpacity onPress={signOut}>
-            <Text style={styles.signOut}>Sign Out</Text>
-          </TouchableOpacity>
+          <TouchableOpacity onPress={signOut}><Text style={styles.signOut}>Sign Out</Text></TouchableOpacity>
         </View>
 
+        {/* Streak */}
         <View style={styles.streakCard}>
           <Text style={styles.streakIcon}>🔥</Text>
           <View>
-            <Text style={styles.streakNum}>
-              {profile?.streak || 0} Day Streak
-            </Text>
-            <Text style={styles.streakSub}>
-              {profile?.totalCheckIns || 0} total {activityLabel.toLowerCase()}s
-            </Text>
+            <Text style={styles.streakNum}>{profile?.streak || 0} Day Streak</Text>
+            <Text style={styles.streakSub}>{profile?.totalCheckIns || 0} total photo checks</Text>
           </View>
         </View>
 
-        {/* Active session banner */}
-        {activeSession && (
-          <View style={styles.activeBanner}>
+        {/* ── SECTION 1: Punch In / Punch Out ────────────────────────────── */}
+        <Text style={styles.sectionTitle}>⏱ Session (Punch In / Out)</Text>
+        <View style={styles.punchCard}>
+          {!todayPunch ? (
+            // Not punched in yet
+            <>
+              <Text style={styles.punchStatus}>No session today</Text>
+              <Text style={styles.punchSub}>Take a selfie to start your session</Text>
+              <TouchableOpacity style={styles.punchInBtn} onPress={() => openModal('punch-in')}>
+                <Text style={styles.punchBtnText}>📸 Punch In</Text>
+              </TouchableOpacity>
+            </>
+          ) : !todayPunch.checkoutAt ? (
+            // Active session
+            <>
+              <View style={styles.punchActiveRow}>
+                <View style={styles.punchDot} />
+                <Text style={styles.punchActiveText}>Session Active</Text>
+              </View>
+              <Text style={styles.punchBig}>{punchDurationMins} min</Text>
+              <Text style={styles.punchSub}>
+                Started {format(new Date(todayPunch.submittedAt), 'hh:mm a')}
+              </Text>
+              <TouchableOpacity style={styles.punchOutBtn} onPress={() => openModal('punch-out')}>
+                <Text style={styles.punchBtnText}>📸 Punch Out</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            // Session complete
+            <>
+              <Text style={styles.punchDoneIcon}>✅</Text>
+              <Text style={styles.punchStatus}>Session Complete</Text>
+              <Text style={styles.punchBig}>{todayPunch.durationMins} min</Text>
+              <Text style={styles.punchSub}>
+                {format(new Date(todayPunch.submittedAt), 'hh:mm a')} – {format(new Date(todayPunch.checkoutAt), 'hh:mm a')}
+              </Text>
+            </>
+          )}
+        </View>
+
+        {/* ── SECTION 2: Photo Checks ─────────────────────────────────────── */}
+        <Text style={styles.sectionTitle}>📸 Photo Checks</Text>
+        <View style={styles.photoSection}>
+          <View style={styles.photoHeader}>
             <View>
-              <Text style={styles.activeTitle}>🟢 Session Active</Text>
-              <Text style={styles.activeSub}>
-                Started {format(new Date(activeSession.submittedAt), "hh:mm a")}{" "}
-                · {sessionDuration} min
-              </Text>
-              <Text style={styles.activeActivity} numberOfLines={1}>
-                {activeSession.activity}
-              </Text>
+              <Text style={styles.photoCount}>{photoChecks.length} today</Text>
+              <Text style={styles.photoSub}>Multiple allowed · manual or via notification</Text>
             </View>
-            <TouchableOpacity
-              style={styles.checkoutBtn}
-              onPress={() => setShowCheckout(true)}
-            >
-              <Text style={styles.checkoutBtnText}>Check Out</Text>
+            <TouchableOpacity style={styles.photoBtn} onPress={() => openModal('photo')}>
+              <Text style={styles.photoBtnText}>+ Add Photo</Text>
             </TouchableOpacity>
           </View>
-        )}
 
-        <Text style={styles.sectionTitle}>Today's Progress</Text>
-        <View style={styles.statusRow}>
-          <View
-            style={[
-              styles.statusCard,
-              {
-                borderColor:
-                  todayCheckins.length > 0 ? Colors.success : Colors.border,
-              },
-            ]}
-          >
-            <Text style={styles.statusIcon}>
-              {todayCheckins.length > 0 ? "✅" : "📸"}
-            </Text>
-            <Text style={styles.statusLabel}>{activityLabel}s</Text>
-            <Text style={styles.statusValue}>{todayCheckins.length}</Text>
-          </View>
-          <View
-            style={[
-              styles.statusCard,
-              { borderColor: todaySummary ? Colors.success : Colors.border },
-            ]}
-          >
-            <Text style={styles.statusIcon}>{todaySummary ? "✅" : "📝"}</Text>
-            <Text style={styles.statusLabel}>{reportLabel}</Text>
-            <Text style={styles.statusValue}>
-              {todaySummary ? "Done" : "Pending"}
-            </Text>
-          </View>
+          {photoChecks.length > 0 && (
+            <View style={styles.photoList}>
+              {photoChecks.map((c: any) => (
+                <View key={c.id} style={styles.photoItem}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.photoActivity} numberOfLines={2}>{c.activity || '(no description)'}</Text>
+                    <Text style={styles.photoTime}>{format(new Date(c.submittedAt), 'hh:mm a')}</Text>
+                  </View>
+                  <Text style={[
+                    styles.photoStatus,
+                    c.status === 'approved' ? { color: Colors.success } :
+                    c.status === 'rejected' ? { color: Colors.danger } : { color: Colors.textSecondary },
+                  ]}>
+                    {c.status === 'approved' ? '✅' : c.status === 'rejected' ? '❌' : '⏳'}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
-        <Text style={styles.sectionTitle}>Quick Actions</Text>
-        <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={[styles.actionBtn, !!activeSession && styles.actionDisabled]}
-            onPress={() => !activeSession && openCheckin()}
-          >
-            <Text style={styles.actionIcon}>📸</Text>
-            <Text style={styles.actionLabel}>
-              {activeSession ? "In Session" : activityLabel}
-            </Text>
-          </TouchableOpacity>
+        {/* ── SECTION 3: Today's Summary ──────────────────────────────────── */}
+        <Text style={styles.sectionTitle}>📝 {reportLabel}</Text>
+        <TouchableOpacity
+          style={[styles.summaryCard, todaySummary && { borderColor: Colors.success }]}
+          onPress={() => router.push('/(student)/summary')}
+        >
+          <Text style={styles.summaryIcon}>{todaySummary ? '✅' : '📝'}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.summaryTitle}>{todaySummary ? `${reportLabel} Submitted` : `Submit ${reportLabel}`}</Text>
+            <Text style={styles.summarySub}>{todaySummary ? 'Tap to view or edit' : 'Due by 11:00 PM'}</Text>
+          </View>
+          <Text style={styles.summaryArrow}>›</Text>
+        </TouchableOpacity>
 
-          {/* Check-out — always visible, grayed when no active session */}
-          <TouchableOpacity
-            style={[
-              styles.actionBtn,
-              activeSession ? { borderColor: Colors.success } : styles.actionDisabled,
-            ]}
-            onPress={() => activeSession && setShowCheckout(true)}
-          >
-            <Text style={styles.actionIcon}>🏁</Text>
-            <Text style={[styles.actionLabel, activeSession ? { color: Colors.success } : {}]}>
-              Check Out
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={() => router.push("/(student)/summary")}
-          >
-            <Text style={styles.actionIcon}>📝</Text>
-            <Text style={styles.actionLabel}>
-              {todaySummary ? `View ${reportLabel}` : reportLabel}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={() => router.push("/(student)/schedule")}
-          >
-            <Text style={styles.actionIcon}>📅</Text>
-            <Text style={styles.actionLabel}>Schedule</Text>
-          </TouchableOpacity>
-        </View>
-
+        {/* ── Schedule ────────────────────────────────────────────────────── */}
         {schedules.length > 0 && (
           <>
-            <Text style={styles.sectionTitle}>Today's Schedule</Text>
+            <Text style={styles.sectionTitle}>📅 Today's Schedule</Text>
             {schedules.slice(0, 3).map((s: any) => (
               <View key={s.id} style={styles.scheduleItem}>
-                <Text style={styles.scheduleTime}>
-                  {s.startTime} – {s.endTime}
-                </Text>
+                <Text style={styles.scheduleTime}>{s.startTime} – {s.endTime}</Text>
                 <Text style={styles.scheduleTitle}>{s.title}</Text>
-              </View>
-            ))}
-          </>
-        )}
-
-        {todayCheckins.length > 0 && (
-          <>
-            <Text style={styles.sectionTitle}>Today's {activityLabel}s</Text>
-            {todayCheckins.map((c: any) => (
-              <View key={c.id} style={styles.checkinItem}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.checkinActivity}>
-                    {c.activity || "Session"}
-                  </Text>
-                  {c.checkoutAt ? (
-                    <Text style={styles.checkinMeta}>
-                      ⏱ {c.durationMins} min ·{" "}
-                      {format(new Date(c.submittedAt), "hh:mm a")} –{" "}
-                      {format(new Date(c.checkoutAt), "hh:mm a")}
-                    </Text>
-                  ) : (
-                    <Text
-                      style={[styles.checkinMeta, { color: Colors.success }]}
-                    >
-                      🟢 Active
-                    </Text>
-                  )}
-                </View>
-                <Text
-                  style={[
-                    styles.checkinStatus,
-                    c.status === "approved"
-                      ? { color: Colors.success }
-                      : c.status === "rejected"
-                        ? { color: Colors.danger }
-                        : { color: Colors.textSecondary },
-                  ]}
-                >
-                  {c.status === "approved"
-                    ? "✅"
-                    : c.status === "rejected"
-                      ? "❌"
-                      : "⏳"}
-                </Text>
               </View>
             ))}
           </>
@@ -362,29 +245,29 @@ export default function StudentHome() {
         <View style={{ height: 32 }} />
       </ScrollView>
 
-      {/* ── Check-in Modal ─────────────────────────────────────────────────── */}
-      <Modal
-        visible={showCheckin}
-        animationType="slide"
-        onRequestClose={() => setShowCheckin(false)}
-      >
-        {checkinPhase === "camera" ? (
+      {/* ── Camera Modal (shared for all 3 actions) ───────────────────────── */}
+      <Modal visible={!!activeModal} animationType="slide" onRequestClose={() => setActiveModal(null)}>
+        {phase === 'camera' ? (
           <View style={{ flex: 1 }}>
             <CameraView ref={cameraRef} style={{ flex: 1 }} facing="front">
               <View style={styles.camOverlay}>
                 <View style={styles.camHeader}>
-                  <TouchableOpacity onPress={() => setShowCheckin(false)}>
+                  <TouchableOpacity onPress={() => setActiveModal(null)}>
                     <Text style={styles.camBack}>✕ Cancel</Text>
                   </TouchableOpacity>
-                  <Text style={styles.camTitle}>📸 {activityLabel}</Text>
+                  <Text style={styles.camTitle}>
+                    {activeModal === 'punch-in'  && '📸 Punch In'}
+                    {activeModal === 'punch-out' && '📸 Punch Out'}
+                    {activeModal === 'photo'     && '📸 Photo Check'}
+                  </Text>
                 </View>
                 <View style={styles.camHint}>
                   <Text style={styles.camHintText}>
-                    Take a selfie to confirm your session
+                    {activeModal === 'punch-in'  && 'Take a selfie to start your session'}
+                    {activeModal === 'punch-out' && 'Take a selfie to end your session'}
+                    {activeModal === 'photo'     && 'Snap a photo of what you\'re doing'}
                   </Text>
-                  <Text style={styles.camHintSub}>
-                    Camera only — no gallery uploads
-                  </Text>
+                  <Text style={styles.camHintSub}>Camera only — no uploads from gallery</Text>
                 </View>
                 <TouchableOpacity style={styles.captureBtn} onPress={takePhoto}>
                   <View style={styles.captureInner} />
@@ -393,43 +276,31 @@ export default function StudentHome() {
             </CameraView>
           </View>
         ) : (
-          <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
-          >
-            <ScrollView
-              style={styles.formSheet}
-              contentContainerStyle={{ padding: 24, paddingTop: 48, gap: 16 }}
-            >
-              <Text style={styles.formTitle}>{activityLabel}</Text>
-              <Text style={styles.formSub}>
-                📸 Photo captured — describe what you're doing.
-              </Text>
+          // Form phase — only for photo checks
+          <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <ScrollView style={styles.formSheet} contentContainerStyle={{ padding: 24, paddingTop: 56, gap: 16 }}>
+              <Text style={styles.formTitle}>📸 Photo Check</Text>
+              <Text style={styles.formSub}>Photo captured. Describe what you're doing right now.</Text>
               <Text style={styles.label}>What are you working on? *</Text>
               <TextInput
                 style={styles.textarea}
                 value={activity}
                 onChangeText={setActivity}
-                placeholder="e.g. Chapter 5 revision, React Native..."
+                placeholder="e.g. Chapter 5 revision, solving practice problems..."
                 multiline
                 numberOfLines={4}
                 autoFocus
               />
               <TouchableOpacity
                 style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
-                onPress={handleSubmitCheckin}
+                onPress={() => handleSubmit()}
                 disabled={submitting}
               >
-                {submitting ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.submitBtnText}>Start Session ✓</Text>
-                )}
+                {submitting
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={styles.submitBtnText}>Submit Photo Check ✓</Text>}
               </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setCheckinPhase("camera")}
-                style={styles.retakeBtn}
-              >
+              <TouchableOpacity onPress={() => setPhase('camera')} style={styles.retakeBtn}>
                 <Text style={styles.retakeBtnText}>↩ Retake Photo</Text>
               </TouchableOpacity>
             </ScrollView>
@@ -437,292 +308,99 @@ export default function StudentHome() {
         )}
       </Modal>
 
-      {/* ── Check-out Modal ────────────────────────────────────────────────── */}
-      <Modal
-        visible={showCheckout}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowCheckout(false)}
-      >
-        <View style={styles.checkoutOverlay}>
-          <View style={styles.checkoutSheet}>
-            <Text style={styles.checkoutTitle}>End Session?</Text>
-            {activeSession && (
-              <>
-                <Text style={styles.checkoutActivity}>
-                  {activeSession.activity}
-                </Text>
-                <View style={styles.checkoutStats}>
-                  <View style={styles.checkoutStat}>
-                    <Text style={styles.checkoutStatVal}>
-                      {sessionDuration}
-                    </Text>
-                    <Text style={styles.checkoutStatLabel}>minutes</Text>
-                  </View>
-                  <View style={styles.checkoutStat}>
-                    <Text style={styles.checkoutStatVal}>
-                      {format(new Date(activeSession.submittedAt), "hh:mm a")}
-                    </Text>
-                    <Text style={styles.checkoutStatLabel}>started</Text>
-                  </View>
-                </View>
-              </>
-            )}
-            <TouchableOpacity
-              style={[
-                styles.submitBtn,
-                { backgroundColor: Colors.success },
-                checkingOut && { opacity: 0.7 },
-              ]}
-              onPress={handleCheckout}
-              disabled={checkingOut}
-            >
-              {checkingOut ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.submitBtnText}>✓ Confirm Check Out</Text>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => setShowCheckout(false)}
-              style={styles.retakeBtn}
-            >
-              <Text style={styles.retakeBtnText}>
-                Cancel — Keep Session Active
-              </Text>
-            </TouchableOpacity>
-          </View>
+      {/* Submitting overlay for punch in/out (no form step) */}
+      {submitting && (activeModal === 'punch-in' || activeModal === 'punch-out') && (
+        <View style={styles.submittingOverlay}>
+          <ActivityIndicator color={Colors.primary} size="large" />
+          <Text style={styles.submittingText}>
+            {activeModal === 'punch-in' ? 'Punching In...' : 'Punching Out...'}
+          </Text>
         </View>
-      </Modal>
+      )}
     </>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bg },
-  center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    padding: 24,
-    paddingTop: 56,
-  },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
+  // Header
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 24, paddingTop: 56 },
   greeting: { fontSize: 16, color: Colors.textSecondary },
-  name: { fontSize: 24, fontWeight: "800", color: Colors.text },
+  name: { fontSize: 24, fontWeight: '800', color: Colors.text },
   orgTag: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
   signOut: { color: Colors.danger, fontSize: 14, padding: 8 },
-  streakCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 16,
-    backgroundColor: Colors.primary,
-    margin: 16,
-    borderRadius: 16,
-    padding: 20,
-  },
+
+  // Streak
+  streakCard: { flexDirection: 'row', alignItems: 'center', gap: 16, backgroundColor: Colors.primary, margin: 16, borderRadius: 16, padding: 20 },
   streakIcon: { fontSize: 40 },
-  streakNum: { fontSize: 20, fontWeight: "800", color: "#fff" },
-  streakSub: { fontSize: 13, color: "rgba(255,255,255,0.8)", marginTop: 2 },
-  activeBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "#ECFDF5",
-    marginHorizontal: 16,
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1.5,
-    borderColor: Colors.success,
-    marginBottom: 4,
-  },
-  activeTitle: { fontSize: 14, fontWeight: "700", color: Colors.success },
-  activeSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
-  activeActivity: {
-    fontSize: 12,
-    color: Colors.text,
-    marginTop: 2,
-    maxWidth: 200,
-  },
-  checkoutBtn: {
-    backgroundColor: Colors.success,
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  checkoutBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: Colors.text,
-    marginHorizontal: 16,
-    marginTop: 20,
-    marginBottom: 10,
-  },
-  statusRow: { flexDirection: "row", gap: 12, marginHorizontal: 16 },
-  statusCard: {
-    flex: 1,
-    backgroundColor: Colors.white,
-    borderRadius: 12,
-    padding: 16,
-    alignItems: "center",
-    borderWidth: 2,
-  },
-  statusIcon: { fontSize: 28 },
-  statusLabel: { fontSize: 13, color: Colors.textSecondary, marginTop: 4 },
-  statusValue: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: Colors.text,
-    marginTop: 2,
-  },
-  actionsRow: {
-    flexDirection: "row",
-    gap: 10,
-    marginHorizontal: 16,
-    flexWrap: "wrap",
-  },
-  actionBtn: {
-    flex: 1,
-    minWidth: "22%",
-    backgroundColor: Colors.white,
-    borderRadius: 12,
-    padding: 14,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  actionDisabled: { opacity: 0.4 },
-  actionIcon: { fontSize: 26 },
-  actionLabel: {
-    fontSize: 11,
-    color: Colors.text,
-    fontWeight: "600",
-    marginTop: 6,
-    textAlign: "center",
-  },
-  scheduleItem: {
-    backgroundColor: Colors.white,
-    marginHorizontal: 16,
-    marginBottom: 8,
-    borderRadius: 12,
-    padding: 14,
-    borderLeftWidth: 4,
-    borderLeftColor: Colors.primary,
-  },
-  scheduleTime: {
-    fontSize: 13,
-    color: Colors.textSecondary,
-    fontWeight: "600",
-  },
-  scheduleTitle: {
-    fontSize: 15,
-    color: Colors.text,
-    fontWeight: "600",
-    marginTop: 2,
-  },
-  checkinItem: {
-    backgroundColor: Colors.white,
-    marginHorizontal: 16,
-    marginBottom: 8,
-    borderRadius: 12,
-    padding: 14,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  checkinActivity: { fontSize: 14, color: Colors.text, fontWeight: "600" },
-  checkinMeta: { fontSize: 12, color: Colors.textSecondary, marginTop: 3 },
-  checkinStatus: { fontSize: 18, marginLeft: 8 },
+  streakNum: { fontSize: 20, fontWeight: '800', color: '#fff' },
+  streakSub: { fontSize: 13, color: 'rgba(255,255,255,0.8)', marginTop: 2 },
+
+  sectionTitle: { fontSize: 18, fontWeight: '700', color: Colors.text, marginHorizontal: 16, marginTop: 20, marginBottom: 10 },
+
+  // Punch card
+  punchCard: { backgroundColor: Colors.white, marginHorizontal: 16, borderRadius: 16, padding: 20, alignItems: 'center', gap: 8, borderWidth: 1.5, borderColor: Colors.border },
+  punchActiveRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  punchDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.success },
+  punchActiveText: { fontSize: 14, fontWeight: '700', color: Colors.success },
+  punchDoneIcon: { fontSize: 32 },
+  punchStatus: { fontSize: 16, fontWeight: '600', color: Colors.text },
+  punchBig: { fontSize: 40, fontWeight: '800', color: Colors.text },
+  punchSub: { fontSize: 13, color: Colors.textSecondary },
+  punchInBtn: { backgroundColor: Colors.primary, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32, marginTop: 8 },
+  punchOutBtn: { backgroundColor: Colors.success, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32, marginTop: 8 },
+  punchBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+
+  // Photo section
+  photoSection: { backgroundColor: Colors.white, marginHorizontal: 16, borderRadius: 16, padding: 16, borderWidth: 1.5, borderColor: Colors.border },
+  photoHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  photoCount: { fontSize: 16, fontWeight: '700', color: Colors.text },
+  photoSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
+  photoBtn: { backgroundColor: Colors.primary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16 },
+  photoBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  photoList: { marginTop: 12, gap: 8 },
+  photoItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: Colors.border },
+  photoActivity: { fontSize: 14, color: Colors.text, fontWeight: '500' },
+  photoTime: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
+  photoStatus: { fontSize: 18, marginLeft: 8 },
+
+  // Summary
+  summaryCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.white, marginHorizontal: 16, borderRadius: 16, padding: 16, borderWidth: 1.5, borderColor: Colors.border, gap: 12 },
+  summaryIcon: { fontSize: 28 },
+  summaryTitle: { fontSize: 15, fontWeight: '700', color: Colors.text },
+  summarySub: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
+  summaryArrow: { fontSize: 24, color: Colors.textSecondary },
+
+  // Schedule
+  scheduleItem: { backgroundColor: Colors.white, marginHorizontal: 16, marginBottom: 8, borderRadius: 12, padding: 14, borderLeftWidth: 4, borderLeftColor: Colors.primary },
+  scheduleTime: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
+  scheduleTitle: { fontSize: 15, color: Colors.text, fontWeight: '600', marginTop: 2 },
+
   // Camera
-  camOverlay: {
-    flex: 1,
-    justifyContent: "space-between",
-    padding: 24,
-    paddingTop: 56,
-    paddingBottom: 48,
-    backgroundColor: "rgba(0,0,0,0.35)",
-  },
-  camHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  camBack: { color: "#fff", fontSize: 16, fontWeight: "600" },
-  camTitle: { color: "#fff", fontSize: 18, fontWeight: "800" },
-  camHint: { alignItems: "center" },
-  camHintText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
-    textAlign: "center",
-  },
-  camHintSub: { color: "rgba(255,255,255,0.7)", fontSize: 13, marginTop: 4 },
-  captureBtn: {
-    alignSelf: "center",
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: "rgba(255,255,255,0.3)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  captureInner: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "#fff",
-  },
+  camOverlay: { flex: 1, justifyContent: 'space-between', padding: 24, paddingTop: 56, paddingBottom: 48, backgroundColor: 'rgba(0,0,0,0.35)' },
+  camHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  camBack: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  camTitle: { color: '#fff', fontSize: 18, fontWeight: '800' },
+  camHint: { alignItems: 'center' },
+  camHintText: { color: '#fff', fontSize: 16, fontWeight: '700', textAlign: 'center' },
+  camHintSub: { color: 'rgba(255,255,255,0.7)', fontSize: 13, marginTop: 4 },
+  captureBtn: { alignSelf: 'center', width: 76, height: 76, borderRadius: 38, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
+  captureInner: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#fff' },
+
   // Form sheet
   formSheet: { flex: 1, backgroundColor: Colors.bg },
-  formTitle: { fontSize: 24, fontWeight: "800", color: Colors.text },
+  formTitle: { fontSize: 24, fontWeight: '800', color: Colors.text },
   formSub: { fontSize: 14, color: Colors.textSecondary },
-  label: { fontSize: 15, fontWeight: "600", color: Colors.text },
-  textarea: {
-    backgroundColor: Colors.white,
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    fontSize: 15,
-    color: Colors.text,
-    textAlignVertical: "top",
-    minHeight: 100,
-  },
-  submitBtn: {
-    backgroundColor: Colors.primary,
-    borderRadius: 12,
-    padding: 16,
-    alignItems: "center",
-  },
-  submitBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  retakeBtn: { alignItems: "center", padding: 12 },
+  label: { fontSize: 15, fontWeight: '600', color: Colors.text },
+  textarea: { backgroundColor: Colors.white, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: Colors.border, fontSize: 15, color: Colors.text, textAlignVertical: 'top', minHeight: 100 },
+  submitBtn: { backgroundColor: Colors.primary, borderRadius: 12, padding: 16, alignItems: 'center' },
+  submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  retakeBtn: { alignItems: 'center', padding: 12 },
   retakeBtnText: { color: Colors.textSecondary, fontSize: 14 },
-  // Checkout modal
-  checkoutOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "flex-end",
-  },
-  checkoutSheet: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 28,
-    paddingBottom: 48,
-    gap: 16,
-  },
-  checkoutTitle: { fontSize: 22, fontWeight: "800", color: Colors.text },
-  checkoutActivity: {
-    fontSize: 15,
-    color: Colors.textSecondary,
-    marginTop: -8,
-  },
-  checkoutStats: { flexDirection: "row", gap: 24, marginVertical: 8 },
-  checkoutStat: { alignItems: "center" },
-  checkoutStatVal: { fontSize: 28, fontWeight: "800", color: Colors.text },
-  checkoutStatLabel: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
+
+  // Submitting overlay
+  submittingOverlay: { position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', gap: 16 },
+  submittingText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });

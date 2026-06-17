@@ -24,13 +24,18 @@ export const updateUser = (uid: string, data: any) => api.put(`/users/${uid}`, d
 export const deactivateUser = (uid: string) => api.delete(`/users/${uid}`);
 
 // ── Check-ins ─────────────────────────────────────────────────────────────────
+// Punch In — one per day, selfie required
+export const punchIn = (formData: FormData) =>
+  api.post('/checkins/punch-in', formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data);
+// Punch Out — selfie required, closes the punch session
+export const checkoutCheckin = (id: string, formData: FormData) =>
+  api.patch(`/checkins/${id}/checkout`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data);
+// Photo Check — multiple per day, manual or notification-triggered
 export const submitCheckin = (formData: FormData) =>
   api.post('/checkins', formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data);
 export const getCheckins = (params?: any) => api.get('/checkins', { params }).then(r => r.data);
 export const reviewCheckin = (id: string, data: { status: string; feedback?: string }) =>
   api.put(`/checkins/${id}/review`, data);
-export const checkoutCheckin = (id: string) =>
-  api.patch(`/checkins/${id}/checkout`, {}).then(r => r.data);
 export const triggerCheckinAlert = (message?: string) =>
   api.post('/checkins/alert', { message }).then(r => r.data);
 

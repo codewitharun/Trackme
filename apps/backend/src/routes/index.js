@@ -31,11 +31,13 @@ router.put('/users/:uid',           authenticate, requireRole('admin'), authCtrl
 router.delete('/users/:uid',        authenticate, requireRole('admin'), authCtrl.deactivateUser);
 
 // ── Check-ins ─────────────────────────────────────────────────────────────────
-router.post('/checkins',            authenticate, requireRole('student'), upload.single('image'), checkinCtrl.submitCheckin);
-router.get('/checkins',             authenticate, checkinCtrl.getCheckins);
-router.put('/checkins/:id/review',  authenticate, requireRole('admin', 'teacher'), checkinCtrl.reviewCheckin);
-router.patch('/checkins/:id/checkout', authenticate, requireRole('student'), checkinCtrl.checkoutCheckin);
-router.post('/checkins/alert',      authenticate, requireRole('admin', 'teacher'), checkinCtrl.triggerCheckinAlert);
+// Static routes MUST come before /:id routes
+router.post('/checkins/punch-in',      authenticate, requireRole('student'), upload.single('image'), checkinCtrl.punchIn);
+router.post('/checkins/alert',         authenticate, requireRole('admin', 'teacher'), checkinCtrl.triggerCheckinAlert);
+router.post('/checkins',               authenticate, requireRole('student'), upload.single('image'), checkinCtrl.submitCheckin);
+router.get('/checkins',                authenticate, checkinCtrl.getCheckins);
+router.put('/checkins/:id/review',     authenticate, requireRole('admin', 'teacher'), checkinCtrl.reviewCheckin);
+router.patch('/checkins/:id/checkout', authenticate, requireRole('student'), upload.single('image'), checkinCtrl.checkoutCheckin);
 
 // ── Daily Summaries ───────────────────────────────────────────────────────────
 router.post('/summaries',           authenticate, requireRole('student'), summaryCtrl.submitSummary);
