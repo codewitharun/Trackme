@@ -33,7 +33,9 @@ export default function StudentHome() {
   const [activity, setActivity]       = useState('');
   const [submitting, setSubmitting]   = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
-  const cameraRef = useRef<CameraView>(null);
+  const cameraRef   = useRef<CameraView>(null);
+  // Ref so handleSubmit always reads current modal type (avoids stale closure)
+  const modalRef = useRef<ModalType>(null);
 
   const activityLabel = org?.activityLabel || 'Check-in';
   const reportLabel   = org?.reportLabel   || 'Daily Report';
@@ -62,6 +64,7 @@ export default function StudentHome() {
       const { granted } = await requestPermission();
       if (!granted) { Alert.alert('Camera Required', 'Camera permission is needed.'); return; }
     }
+    modalRef.current = type;
     setPhotoUri(null); setActivity(''); setPhase('camera'); setActiveModal(type);
   };
 
@@ -69,9 +72,9 @@ export default function StudentHome() {
     if (!cameraRef.current) return;
     const photo = await cameraRef.current.takePictureAsync({ quality: 0.7 });
     if (photo?.uri) {
-      setPhotoUri(photo.uri);
-      // Photo checks have a form step; punch in/out submit directly after photo
-      if (activeModal === 'photo') {
+      // Use ref so value is current even after setPhotoUri re-render
+      if (modalRef.current === 'photo') {
+        setPhotoUri(photo.uri);
         setPhase('form');
       } else {
         handleSubmit(photo.uri);
@@ -82,24 +85,33 @@ export default function StudentHome() {
   const handleSubmit = async (uri?: string) => {
     const imageUri = uri || photoUri;
     if (!imageUri) return;
+    // Read from ref — never stale
+    const modalType = modalRef.current;
     setSubmitting(true);
     try {
       const fd = new FormData();
       fd.append('image', { uri: imageUri, type: 'image/jpeg', name: 'photo.jpg' } as any);
 
-      if (activeModal === 'punch-in') {
-        await punchIn(fd);
+      if (modalType === 'punch-in') {
+        const res = await punchIn(fd);
+        // Optimistic update — don't wait for re-fetch
+        setTodayPunch(res);
+        setActiveModal(null);
         Alert.alert('✅ Punched In', 'Session started. Remember to punch out when done.');
-      } else if (activeModal === 'punch-out' && todayPunch) {
+      } else if (modalType === 'punch-out' && todayPunch) {
         const res = await checkoutCheckin(todayPunch.id, fd);
+        // Optimistic update
+        setTodayPunch((prev: any) => ({ ...prev, checkoutAt: res.checkoutAt, durationMins: res.durationMins }));
+        setActiveModal(null);
         Alert.alert('🏁 Punched Out', `Session duration: ${res.durationMins} minutes`);
-      } else if (activeModal === 'photo') {
+      } else if (modalType === 'photo') {
         if (!activity.trim()) { setSubmitting(false); Alert.alert('Required', 'Describe what you are doing'); return; }
         fd.append('activity', activity.trim());
-        await submitCheckin(fd);
+        const res = await submitCheckin(fd);
+        // Optimistic update — prepend to list
+        setPhotoChecks((prev: any[]) => [res, ...prev]);
+        setActiveModal(null);
       }
-      setActiveModal(null);
-      load();
     } catch (err: any) {
       Alert.alert('Error', err.response?.data?.error || 'Something went wrong');
     } finally {

@@ -5,7 +5,8 @@ import {
 } from 'react-native';
 import { Colors } from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
-import { deactivateUser, listUsers, registerUser } from '../../services/api';
+import { deactivateUser, listUsers, registerUser, getCheckins } from '../../services/api';
+import { format } from 'date-fns';
 
 type InternalRole = 'student' | 'teacher' | 'admin';
 
@@ -13,6 +14,8 @@ export default function UsersScreen() {
   const { profile, org } = useAuth();
   const [users, setUsers]       = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
+  // Map of studentId → punch record for today
+  const [punchMap, setPunchMap] = useState<Record<string, any>>({});
   const [roleFilter, setRoleFilter] = useState<InternalRole>('student');
   const [showAdd, setShowAdd]   = useState(false);
   const [adding, setAdding]     = useState(false);
@@ -36,6 +39,16 @@ export default function UsersScreen() {
     try {
       const data = await listUsers({ role });
       setUsers(data);
+      if (role === 'student') {
+        // Fetch today's punch-ins so we can show status on each card
+        const today = format(new Date(), 'yyyy-MM-dd');
+        const punches = await getCheckins({ date: today, type: 'punch' });
+        const map: Record<string, any> = {};
+        punches.forEach((p: any) => { map[p.studentId] = p; });
+        setPunchMap(map);
+      } else {
+        setPunchMap({});
+      }
     } catch {}
     setLoading(false);
   };
@@ -131,6 +144,18 @@ export default function UsersScreen() {
                   <Text style={styles.userRole}>{labels[item.role as InternalRole]}</Text>
                   {item.role === 'student' && (
                     <Text style={styles.userStats}>🔥 {item.streak || 0} · 📸 {item.totalCheckIns || 0}</Text>
+                  )}
+                  {item.role === 'student' && punchMap[item.id] && (
+                    <View style={[
+                      styles.punchBadge,
+                      punchMap[item.id].checkoutAt ? styles.punchBadgeDone : styles.punchBadgeActive,
+                    ]}>
+                      <Text style={styles.punchBadgeText}>
+                        {punchMap[item.id].checkoutAt
+                          ? `✅ Punched Out · ${punchMap[item.id].durationMins}m`
+                          : `🟢 Punched In · ${format(new Date(punchMap[item.id].submittedAt), 'hh:mm a')}`}
+                      </Text>
+                    </View>
                   )}
                 </View>
                 <View style={styles.cardActions}>
@@ -245,6 +270,10 @@ const styles = StyleSheet.create({
   userEmail: { fontSize: 13, color: Colors.textSecondary },
   userRole: { fontSize: 12, color: Colors.primary, fontWeight: '600', marginTop: 1 },
   userStats: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  punchBadge: { alignSelf: 'flex-start', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, marginTop: 4 },
+  punchBadgeActive: { backgroundColor: '#DCFCE7' },
+  punchBadgeDone: { backgroundColor: '#F3F4F6' },
+  punchBadgeText: { fontSize: 11, fontWeight: '600', color: Colors.text },
   cardActions: { alignItems: 'center', gap: 6 },
   statusDot: { width: 10, height: 10, borderRadius: 5 },
   dotActive: { backgroundColor: Colors.success },
