@@ -1,4 +1,4 @@
-const { db, messaging } = require("../services/firebase");
+const { db } = require("../services/firebase");
 
 // Create a study schedule / check-in window
 exports.createSchedule = async (req, res) => {

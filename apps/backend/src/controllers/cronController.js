@@ -2,7 +2,7 @@
  * Cron endpoint handlers — called by Vercel Cron on schedule.
  * Protected by CRON_SECRET header so only Vercel can trigger them.
  */
-const { db, messaging } = require("../services/firebase");
+const { db } = require("../services/firebase");
 
 const authorizeCron = (req, res) => {
   const secret = process.env.CRON_SECRET;
@@ -15,9 +15,6 @@ const authorizeCron = (req, res) => {
 
 const sendPush = async (tokens, title, body, data = {}) => {
   if (!tokens.length) return 0;
-  await messaging
-    .sendEachForMulticast({ tokens, notification: { title, body }, data })
-    .catch(() => {});
   return tokens.length;
 };
 
