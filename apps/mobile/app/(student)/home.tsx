@@ -269,17 +269,19 @@ export default function StudentHome() {
             </Text>
           </TouchableOpacity>
 
-          {activeSession && (
-            <TouchableOpacity
-              style={[styles.actionBtn, { borderColor: Colors.success }]}
-              onPress={() => setShowCheckout(true)}
-            >
-              <Text style={styles.actionIcon}>🏁</Text>
-              <Text style={[styles.actionLabel, { color: Colors.success }]}>
-                Check Out
-              </Text>
-            </TouchableOpacity>
-          )}
+          {/* Check-out — always visible, grayed when no active session */}
+          <TouchableOpacity
+            style={[
+              styles.actionBtn,
+              activeSession ? { borderColor: Colors.success } : styles.actionDisabled,
+            ]}
+            onPress={() => activeSession && setShowCheckout(true)}
+          >
+            <Text style={styles.actionIcon}>🏁</Text>
+            <Text style={[styles.actionLabel, activeSession ? { color: Colors.success } : {}]}>
+              Check Out
+            </Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.actionBtn}
