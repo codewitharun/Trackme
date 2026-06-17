@@ -1,49 +1,41 @@
-const { Expo } = require('expo-server-sdk');
+const axios = require('axios');
 
-const expo = new Expo();
+const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
 /**
- * Send push notifications via Expo Push Service.
- * Tokens must be Expo push tokens (ExponentPushToken[xxx]).
+ * Send push notifications via Expo Push API (no SDK — avoids ESM conflicts).
+ * Tokens must be Expo push tokens: ExponentPushToken[xxx]
  */
 const sendPushNotifications = async (tokens, title, body, data = {}) => {
-  // Filter valid Expo tokens only
-  const validTokens = tokens.filter(t => Expo.isExpoPushToken(t));
-  if (!validTokens.length) {
-    console.log('[PUSH] No valid Expo tokens to send to');
+  const valid = tokens.filter(t => t && t.startsWith('ExponentPushToken'));
+  if (!valid.length) {
+    console.log('[PUSH] No valid Expo tokens');
     return 0;
   }
 
-  const messages = validTokens.map(token => ({
-    to: token,
-    sound: 'default',
-    title,
-    body,
-    data,
-    priority: 'high',
-    channelId: 'default',
+  const messages = valid.map(to => ({
+    to, sound: 'default', title, body, data, priority: 'high', channelId: 'default',
   }));
 
-  const chunks = expo.chunkPushNotifications(messages);
-  let sent = 0;
+  try {
+    const { data: result } = await axios.post(EXPO_PUSH_URL, messages, {
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+    });
 
-  for (const chunk of chunks) {
-    try {
-      const tickets = await expo.sendPushNotificationsAsync(chunk);
-      tickets.forEach((ticket, i) => {
-        if (ticket.status === 'ok') {
-          sent++;
-        } else {
-          console.warn('[PUSH] Ticket error for token', validTokens[i], ':', ticket.message);
-        }
-      });
-    } catch (err) {
-      console.error('[PUSH] Chunk send error:', err.message);
-    }
+    const tickets = result.data || [];
+    const sent = tickets.filter(t => t.status === 'ok').length;
+    const errors = tickets.filter(t => t.status !== 'ok');
+    if (errors.length) console.warn('[PUSH] Errors:', JSON.stringify(errors));
+    console.log(`[PUSH] Sent ${sent}/${valid.length}`);
+    return sent;
+  } catch (err) {
+    console.error('[PUSH] Failed:', err.message);
+    return 0;
   }
-
-  console.log(`[PUSH] Sent ${sent}/${validTokens.length} notifications`);
-  return sent;
 };
 
 module.exports = { sendPushNotifications };
