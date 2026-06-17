@@ -1,6 +1,5 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { updateFcmToken } from './api';
 
@@ -39,17 +38,15 @@ export const registerForPushNotifications = async (): Promise<string | null> => 
       });
     }
 
-    const projectId = Constants.expoConfig?.extra?.eas?.projectId
-      ?? process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+    // Native FCM token — required by Firebase Admin SDK
+    // Works only in development builds (not Expo Go from SDK 53+)
+    const { data: fcmToken } = await Notifications.getDevicePushTokenAsync();
+    console.log('[NOTIF] FCM token type: native, length:', fcmToken?.length);
 
-    // Expo Push Token — works with Expo Push Service on backend
-    const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId });
-    console.log('[NOTIF] Expo push token:', token);
-
-    await updateFcmToken(token).catch(err =>
-      console.warn('[NOTIF] Failed to save token:', err.message)
+    await updateFcmToken(fcmToken).catch(err =>
+      console.warn('[NOTIF] Failed to save FCM token:', err.message)
     );
-    return token;
+    return fcmToken;
   } catch (err: any) {
     console.warn('[NOTIF] registerForPushNotifications failed:', err.message);
     return null;

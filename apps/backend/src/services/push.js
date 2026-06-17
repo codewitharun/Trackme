@@ -1,37 +1,27 @@
-const axios = require('axios');
-
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+const { messaging } = require('./firebase');
 
 /**
- * Send push notifications via Expo Push API (no SDK — avoids ESM conflicts).
- * Tokens must be Expo push tokens: ExponentPushToken[xxx]
+ * Send push notifications via Firebase Admin SDK.
+ * Tokens must be native FCM tokens from getDevicePushTokenAsync().
  */
 const sendPushNotifications = async (tokens, title, body, data = {}) => {
-  const valid = tokens.filter(t => t && t.startsWith('ExponentPushToken'));
-  if (!valid.length) {
-    console.log('[PUSH] No valid Expo tokens');
-    return 0;
-  }
+  const valid = tokens.filter(Boolean);
+  if (!valid.length) { console.log('[PUSH] No tokens'); return 0; }
 
-  const messages = valid.map(to => ({
-    to, sound: 'default', title, body, data, priority: 'high', channelId: 'default',
-  }));
+  // Convert all data values to strings (FCM requirement)
+  const stringData = Object.fromEntries(
+    Object.entries(data).map(([k, v]) => [k, String(v)])
+  );
 
   try {
-    const { data: result } = await axios.post(EXPO_PUSH_URL, messages, {
-      headers: {
-        'Accept': 'application/json',
-        'Accept-Encoding': 'gzip, deflate',
-        'Content-Type': 'application/json',
-      },
+    const response = await messaging.sendEachForMulticast({
+      tokens: valid,
+      notification: { title, body },
+      data: stringData,
+      android: { priority: 'high', notification: { channelId: 'default', sound: 'default' } },
     });
-
-    const tickets = result.data || [];
-    const sent = tickets.filter(t => t.status === 'ok').length;
-    const errors = tickets.filter(t => t.status !== 'ok');
-    if (errors.length) console.warn('[PUSH] Errors:', JSON.stringify(errors));
-    console.log(`[PUSH] Sent ${sent}/${valid.length}`);
-    return sent;
+    console.log(`[PUSH] Sent ${response.successCount}/${valid.length} — ${response.failureCount} failed`);
+    return response.successCount;
   } catch (err) {
     console.error('[PUSH] Failed:', err.message);
     return 0;

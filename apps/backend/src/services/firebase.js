@@ -3,7 +3,6 @@ const admin = require('firebase-admin');
 if (!admin.apps.length) {
   const privateKey = process.env.FIREBASE_PRIVATE_KEY;
   if (!privateKey) throw new Error('FIREBASE_PRIVATE_KEY env var is missing');
-
   admin.initializeApp({
     credential: admin.credential.cert({
       projectId:   process.env.FIREBASE_PROJECT_ID,
@@ -13,7 +12,8 @@ if (!admin.apps.length) {
   });
 }
 
-const db   = admin.firestore();
-const auth = admin.auth();
+const db        = admin.firestore();
+const auth      = admin.auth();
+const messaging = admin.messaging();
 
-module.exports = { admin, db, auth };
+module.exports = { admin, db, auth, messaging };
