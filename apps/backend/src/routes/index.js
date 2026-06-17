@@ -8,6 +8,14 @@ const checkinCtrl = require('../controllers/checkinController');
 const summaryCtrl = require('../controllers/summaryController');
 const scheduleCtrl = require('../controllers/scheduleController');
 const orgCtrl     = require('../controllers/orgController');
+const cronCtrl    = require('../controllers/cronController');
+
+// ── Cron endpoints (called by Vercel Cron) ────────────────────────────────────
+router.get('/cron/morning',           cronCtrl.morning);
+router.get('/cron/afternoon',         cronCtrl.afternoon);
+router.get('/cron/evening',           cronCtrl.evening);
+router.get('/cron/summary-reminder',  cronCtrl.summaryReminder);
+router.get('/cron/streak-reset',      cronCtrl.streakReset);
 
 // ── Organisation ──────────────────────────────────────────────────────────────
 router.post('/organisations',        authenticate, requireRole('admin'), orgCtrl.createOrg);

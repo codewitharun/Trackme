@@ -6,7 +6,6 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 
 const routes = require('./routes');
-const { startCronJobs } = require('./services/cron');
 
 const app = express();
 
@@ -30,8 +29,9 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
 });
 
-// Only listen when running locally (not on Vercel)
+// Cron jobs only run locally — Vercel serverless has no persistent process
 if (process.env.VERCEL !== '1') {
+  const { startCronJobs } = require('./services/cron');
   const PORT = process.env.PORT || 5001;
   app.listen(PORT, () => {
     console.log(`🚀 TrackMe backend running on port ${PORT}`);
@@ -39,5 +39,4 @@ if (process.env.VERCEL !== '1') {
   });
 }
 
-// Export for Vercel serverless
 module.exports = app;
